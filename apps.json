@@ -1,0 +1,5 @@
+{
+  "apps": [
+    {"repository": "frostyard/igloo", "tags": ["latest"]}
+  ]
+}

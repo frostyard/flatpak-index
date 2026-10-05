@@ -1,0 +1,53 @@
+name: Publish
+
+# Rebuilds the remote from GHCR and deploys it to GitHub Pages. App
+# repositories push images only; the index reads them anonymously, so it needs
+# no credentials for other repositories. Apps can dispatch this workflow after
+# publishing, and the schedule catches up when they cannot.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the index
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Test
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Build
+        run: python3 scripts/build-index.py --apps apps.json --site _site
+
+      - uses: actions/configure-pages@v6.0.0
+
+      - uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5.0.1
