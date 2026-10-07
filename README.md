@@ -17,6 +17,7 @@ other Flatpak:
 | App | Install |
 | --- | --- |
 | [Igloo](https://github.com/frostyard/igloo), a terminal for nsl machines and containers | `flatpak install frostyard io.github.frostyard.Igloo` |
+| [Penguin Mail](https://penguin-mail.com), mail and calendar; signs in to IMAP and POP3 accounts but not Gmail or Microsoft (see below) | `flatpak install frostyard io.github.c9dev.PenguinMail` |
 
 Apps use runtimes from Flathub, such as the GNOME runtime. If Flathub is not
 set up, [add it](https://flathub.org/setup) first.
@@ -64,6 +65,18 @@ The approach follows [tuna-os/flatpak-index](https://github.com/tuna-os/flatpak-
 
 The app should install `/app/share/metainfo/APP_ID.metainfo.xml` and its icons,
 or software centres show a bare application ID.
+
+## Apps built here
+
+Some apps come from other projects and are built in this repository instead,
+each by its own workflow, which pushes to `ghcr.io/frostyard/APP` the same way.
+
+- [Penguin Mail](https://github.com/c9dev/penguin-mail):
+  [`penguin-mail.yml`](.github/workflows/penguin-mail.yml) builds a pinned
+  upstream release with upstream's own manifest and starts it on a hidden
+  display before publishing. To update it, change `UPSTREAM_TAG` and
+  `UPSTREAM_COMMIT` together. That manifest has no Google or Microsoft OAuth
+  client, so this build cannot sign in to Gmail or Microsoft accounts.
 
 ## Develop
 

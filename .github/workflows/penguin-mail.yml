@@ -1,0 +1,124 @@
+name: Penguin Mail
+
+# Builds Penguin Mail (https://penguin-mail.com, GPL-3.0-or-later) from a
+# pinned upstream release with upstream's own Flatpak manifest, and publishes
+# it to ghcr.io/frostyard/penguin-mail for the Frostyard remote. Penguin Mail
+# is not on Flathub, and upstream publishes no Flatpak of its own.
+#
+# The manifest builds offline from upstream's cargo-sources.json and carries
+# no Google or Microsoft OAuth client, so this build cannot sign in to Gmail
+# or Microsoft accounts. IMAP and POP3 accounts, and --demo, work.
+#
+# To move to a new release, change UPSTREAM_TAG and UPSTREAM_COMMIT together.
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/penguin-mail.yml]
+  pull_request:
+    branches: [main]
+    paths: [.github/workflows/penguin-mail.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: penguin-mail-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_ID: io.github.c9dev.PenguinMail
+  IMAGE: ghcr.io/frostyard/penguin-mail
+  UPSTREAM: c9dev/penguin-mail
+  UPSTREAM_TAG: v1.0.0
+  UPSTREAM_COMMIT: 19d55778681ac5099c347b7e0fd91781fc166f1b
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Flathub's image with the GNOME 50 SDK the manifest names. flatpak-builder
+    # sandboxes builds with bubblewrap, which needs a privileged container.
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: ${{ env.UPSTREAM }}
+          ref: ${{ env.UPSTREAM_COMMIT }}
+          persist-credentials: false
+
+      # The pin names both, so a tag moved upstream, or a typo here, fails
+      # the build instead of shipping a commit nobody chose.
+      - name: Check the tag is the pinned commit
+        run: |
+          tagged=$(git ls-remote "https://github.com/$UPSTREAM.git" "refs/tags/$UPSTREAM_TAG^{}" | cut -f1)
+          if [ "$tagged" != "$UPSTREAM_COMMIT" ]; then
+            echo "$UPSTREAM_TAG is ${tagged:-missing}, not $UPSTREAM_COMMIT" >&2
+            exit 1
+          fi
+
+      - name: Build
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6.8
+        with:
+          manifest-path: packaging/flatpak/io.github.c9dev.PenguinMail.yml
+          bundle: penguin-mail.flatpak
+          artifact-name: penguin-mail-flatpak
+          cache-key: flatpak-builder-penguin-mail-${{ env.UPSTREAM_COMMIT }}
+
+      # Upstream's own check: install the bundle and start it on a hidden
+      # display, so a missing library or permission fails here.
+      - name: Start it
+        run: |
+          command -v Xvfb dbus-run-session || dnf install -y xorg-x11-server-Xvfb dbus-tools
+          flatpak install --noninteractive -y --bundle penguin-mail.flatpak
+          scripts/smoke-start.sh flatpak run "$APP_ID"
+
+      - name: Export the OCI image
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: flatpak build-bundle --oci --arch=x86_64 repo penguin-mail.oci "$APP_ID"
+
+      - name: Keep the OCI image for publishing
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: penguin-mail-oci
+          path: penguin-mail.oci
+          retention-days: 1
+
+  publish:
+    name: Publish
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      actions: write
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: penguin-mail-oci
+          path: penguin-mail.oci
+
+      - name: Push to GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          echo "$GITHUB_TOKEN" | skopeo login ghcr.io --username "$ACTOR" --password-stdin
+          # latest is what the remote serves; the version tag keeps each
+          # release pullable.
+          for tag in latest "${UPSTREAM_TAG#v}"; do
+            skopeo copy oci:penguin-mail.oci "docker://$IMAGE:$tag"
+          done
+
+      # A dispatch made with GITHUB_TOKEN still starts a workflow, so the
+      # remote picks up the new image now rather than at the next hourly run.
+      - name: Refresh the Frostyard remote
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref main
