@@ -5,9 +5,14 @@ name: Penguin Mail
 # it to ghcr.io/frostyard/penguin-mail for the Frostyard remote. Penguin Mail
 # is not on Flathub, and upstream publishes no Flatpak of its own.
 #
-# The manifest builds offline from upstream's cargo-sources.json and carries
-# no Google or Microsoft OAuth client, so this build cannot sign in to Gmail
-# or Microsoft accounts. IMAP and POP3 accounts, and --demo, work.
+# The manifest builds offline from upstream's cargo-sources.json. Upstream
+# keeps its Google and Microsoft OAuth clients out of it; this workflow puts
+# them in from the repository secrets PENGUIN_MAIL_GOOGLE_CLIENT_ID,
+# PENGUIN_MAIL_GOOGLE_CLIENT_SECRET and PENGUIN_MAIL_MICROSOFT_CLIENT_ID, the
+# way upstream's scripts/flatpak-sources.sh --flathub does. Without the Google
+# pair the app cannot sign in to Gmail, so main refuses to publish; pull
+# requests still build, to test the build. Microsoft is optional: without it
+# the app hides Microsoft in Add Account.
 #
 # To move to a new release, change UPSTREAM_TAG and UPSTREAM_COMMIT together.
 
@@ -60,6 +65,38 @@ jobs:
             echo "$UPSTREAM_TAG is ${tagged:-missing}, not $UPSTREAM_COMMIT" >&2
             exit 1
           fi
+
+      # Google treats an installed app's client secret as public, and the app
+      # carries it in its binary either way; the secrets keep it out of this
+      # repository and out of logs.
+      - name: Put the OAuth clients into the manifest
+        env:
+          PENGUIN_MAIL_GOOGLE_CLIENT_ID: ${{ secrets.PENGUIN_MAIL_GOOGLE_CLIENT_ID }}
+          PENGUIN_MAIL_GOOGLE_CLIENT_SECRET: ${{ secrets.PENGUIN_MAIL_GOOGLE_CLIENT_SECRET }}
+          PENGUIN_MAIL_MICROSOFT_CLIENT_ID: ${{ secrets.PENGUIN_MAIL_MICROSOFT_CLIENT_ID }}
+          PUBLISHING: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+        run: |
+          if [ -z "$PENGUIN_MAIL_GOOGLE_CLIENT_ID" ] || [ -z "$PENGUIN_MAIL_GOOGLE_CLIENT_SECRET" ]; then
+            if [ "$PUBLISHING" = true ]; then
+              echo "::error::PENGUIN_MAIL_GOOGLE_CLIENT_ID and _SECRET are not set; a build without them cannot sign in to Gmail" >&2
+              exit 1
+            fi
+            echo "::warning::No Google OAuth client; this build cannot sign in to Gmail"
+          fi
+          [ -n "$PENGUIN_MAIL_MICROSOFT_CLIENT_ID" ] || echo "::warning::No Microsoft OAuth client; this build hides Microsoft accounts"
+          python3 - packaging/flatpak/io.github.c9dev.PenguinMail.yml <<'PY'
+          import json, os, sys
+          path = sys.argv[1]
+          text = open(path, encoding="utf-8").read()
+          for name in ("PENGUIN_MAIL_GOOGLE_CLIENT_ID", "PENGUIN_MAIL_GOOGLE_CLIENT_SECRET",
+                       "PENGUIN_MAIL_MICROSOFT_CLIENT_ID"):
+              empty = f'{name}: ""'
+              if text.count(empty) != 1:
+                  sys.exit(f"{path} has no single empty {name}; upstream changed the manifest")
+              # A JSON string is a YAML double-quoted string too.
+              text = text.replace(empty, f"{name}: {json.dumps(os.environ[name])}")
+          open(path, "w", encoding="utf-8").write(text)
+          PY
 
       - name: Build
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6.8
