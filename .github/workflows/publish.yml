@@ -3,7 +3,9 @@ name: Publish
 # Rebuilds the remote from GHCR and deploys it to GitHub Pages. App
 # repositories push images only; the index reads them anonymously, so it needs
 # no credentials for other repositories. Apps can dispatch this workflow after
-# publishing, and the schedule catches up when they cannot.
+# publishing, and the schedule catches up when they cannot. The index lists
+# only digests with a valid attestation. The build fails if one has none, so
+# the deploy job does not run and the last deployed site stays live.
 
 on:
   push:
@@ -24,17 +26,21 @@ jobs:
     name: Build the index
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Test
         run: python3 -m unittest discover -s tests -v
 
       - name: Build
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python3 scripts/build-index.py --apps apps.json --site _site
 
-      - uses: actions/configure-pages@v6.0.0
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
-      - uses: actions/upload-pages-artifact@v5.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: _site
 
@@ -50,4 +56,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v5.0.1
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

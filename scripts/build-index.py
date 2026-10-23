@@ -8,13 +8,26 @@ images built with `flatpak build-bundle --oci` to GHCR; this script asks GHCR
 for the images of every app in apps.json and writes that document, so no app
 repository needs credentials for this one.
 
+The index lists only attested images. Before it reads an image, the script runs
+`gh attestation verify` on the digest that the tag points to. The attestation
+must come from the release workflow that apps.json names in "workflow", in the
+app's own repository, on a v* tag, on a GitHub-hosted runner. Any digest
+without a valid attestation stops the whole run with a non-zero exit code, so
+nothing is deployed. The script also checks that every manifest and config
+blob matches its sha256 digest, so the labels come from the verified image.
+Images that are missing, private or not Flatpaks are skipped, in that order of
+checks: a Flatpak check comes only after the verification.
+
 Usage: build-index.py --apps apps.json --site _site
 """
 
 import argparse
 import html
+import hashlib
 import json
+import re
 import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -33,8 +46,15 @@ INDEX_TYPES = [
 ]
 
 
+TAG_REF = re.compile(r"refs/tags/v[0-9][^/]*")
+
+
 class Missing(Exception):
     """The registry has no public image for a repository and tag."""
+
+
+class Unverified(Exception):
+    """An image digest has no valid attestation, or its content does not match its digest."""
 
 
 def fetch(url, token=None, accept=None):
@@ -61,7 +81,21 @@ def pull_token(repository):
     return json.loads(body)["token"]
 
 
+def sha256_digest(body):
+    return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+def check_digest(what, body, expected=None, header=None):
+    """Return the sha256 digest of body; fail if it differs from the digest asked for or sent."""
+    actual = sha256_digest(body)
+    for source, digest in (("requested", expected), ("Docker-Content-Digest", header)):
+        if digest and digest != actual:
+            raise Unverified(f"{what}: content has digest {actual}, but the {source} digest is {digest}")
+    return actual
+
+
 def get_manifest(repository, reference, token):
+    """Return the digest, media type and content of a manifest; the digest is computed from the body."""
     try:
         headers, body = fetch(f"{REGISTRY}/v2/{repository}/manifests/{reference}", token,
                               ", ".join(INDEX_TYPES + MANIFEST_TYPES))
@@ -70,20 +104,59 @@ def get_manifest(repository, reference, token):
         if e.code in (401, 403, 404):
             raise Missing(f"{repository}:{reference}: HTTP {e.code}") from e
         raise
+    expected = reference if reference.startswith("sha256:") else None
+    digest = check_digest(f"{repository}:{reference}", body, expected, headers.get("Docker-Content-Digest"))
     manifest = json.loads(body)
     media_type = manifest.get("mediaType") or headers.get("Content-Type", "").split(";")[0]
-    return headers.get("Docker-Content-Digest"), media_type, manifest
+    return digest, media_type, manifest
 
 
 def get_blob(repository, digest, token):
     _, body = fetch(f"{REGISTRY}/v2/{repository}/blobs/{digest}", token)
+    check_digest(f"{repository} blob {digest}", body, expected=digest)
     return json.loads(body)
 
 
-def image_entries(repository, tag):
+def verify_attestation(repository, digest, workflow):
+    """Fail with Unverified unless the digest has an attestation from the workflow on a v* tag."""
+    what = f"{repository}@{digest} (workflow {workflow})"
+    command = [
+        "gh", "attestation", "verify", f"oci://ghcr.io/{repository}@{digest}",
+        "--repo", repository,
+        "--signer-workflow", f"github.com/{repository}/{workflow}",
+        "--deny-self-hosted-runners",
+        "--format", "json",
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    except FileNotFoundError as e:
+        raise Unverified(f"{what}: the gh command was not found") from e
+    except subprocess.TimeoutExpired as e:
+        raise Unverified(f"{what}: gh timed out after 120 seconds") from e
+    if result.returncode != 0:
+        tail = " | ".join((result.stderr or "").strip().splitlines()[-3:])
+        raise Unverified(f"{what}: gh attestation verify exited with {result.returncode}: {tail}")
+    try:
+        items = json.loads(result.stdout)
+        certificates = [item["verificationResult"]["signature"]["certificate"] for item in items]
+    except (ValueError, KeyError, TypeError) as e:
+        raise Unverified(f"{what}: cannot read the gh output: {e!r}") from e
+    for certificate in certificates:
+        ref = certificate.get("sourceRepositoryRef") if isinstance(certificate, dict) else None
+        if (isinstance(ref, str) and TAG_REF.fullmatch(ref)
+                and certificate.get("buildSignerURI") == f"https://github.com/{repository}/{workflow}@{ref}"):
+            return
+    raise Unverified(f"{what}: no attestation from a v* tag built by that workflow")
+
+
+def image_entries(repository, tag, workflow):
     """The Flatpak images a tag names, one per architecture."""
     token = pull_token(repository)
     digest, media_type, manifest = get_manifest(repository, tag, token)
+    # Verify before reading anything else. For an image index, this one check is
+    # enough: its child manifests are bound to it by digest, and get_manifest
+    # checks that each child's body matches that digest.
+    verify_attestation(repository, digest, workflow)
     manifests = [(digest, media_type, manifest)]
     if media_type in INDEX_TYPES:
         manifests = [get_manifest(repository, m["digest"], token) for m in manifest.get("manifests", [])]
@@ -111,13 +184,17 @@ def image_entries(repository, tag):
 
 def build_index(apps):
     """The index/static document for the apps in an apps.json document."""
+    for app in apps["apps"]:
+        if not app.get("workflow"):
+            raise ValueError(f'{app.get("repository")}: apps.json needs a "workflow" key, the release workflow path in that repository')
     results = []
     for app in apps["apps"]:
         repository = app["repository"]
+        workflow = app["workflow"]
         images = {}
         for tag in app.get("tags", ["latest"]):
             try:
-                entries = image_entries(repository, tag)
+                entries = image_entries(repository, tag, workflow)
             except Missing as e:
                 print(f"warning: no public image for {e}; skipped", file=sys.stderr)
                 continue
@@ -191,7 +268,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     apps = json.loads(args.apps.read_text())
-    index = build_index(apps)
+    try:
+        index = build_index(apps)
+    except Unverified as e:
+        print(f"error: unverified image: {e}", file=sys.stderr)
+        sys.exit(1)
     write_site(index, args.site, args.apps.resolve().parent)
     count = sum(len(r["Images"]) for r in index["Results"])
     print(f"Wrote {count} image(s) from {len(index['Results'])} of {len(apps['apps'])} app(s) to {args.site}")

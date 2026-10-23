@@ -1,5 +1,6 @@
 {
   "apps": [
-    {"repository": "frostyard/igloo", "tags": ["latest"]}
+    {"repository": "frostyard/igloo", "tags": ["latest"],
+     "workflow": ".github/workflows/flatpak.yml"}
   ]
 }
