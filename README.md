@@ -37,8 +37,9 @@ The remote is an OCI remote, the format Fedora's Flatpak registry uses.
    only if the attestation comes from the app's release workflow, on a `v*`
    tag, on a GitHub-hosted runner. It also checks that every manifest and
    config blob matches its digest. It writes the verified images to
-   `index/static`, the catalogue Flatpak reads from an OCI remote, and deploys that with [`frostyard.flatpakrepo`](frostyard.flatpakrepo)
-   to GitHub Pages.
+   `index/static`, the catalogue Flatpak reads from an OCI remote, and
+   deploys that with [`frostyard.flatpakrepo`](frostyard.flatpakrepo) to
+   GitHub Pages.
 3. `flatpak remote-ls` and `flatpak install` fetch `index/static`, then pull
    the image from GHCR. GHCR wants a token even for public images, which the
    `org.flatpak.Authenticator.Oci` authenticator named in the `.flatpakrepo`
