@@ -17,6 +17,7 @@ other Flatpak:
 | App | Install |
 | --- | --- |
 | [Igloo](https://github.com/frostyard/igloo), a terminal for nsl machines and containers | `flatpak install frostyard io.github.frostyard.Igloo` |
+| [Frostnotes](https://github.com/frostyard/frostnotes), plain Markdown notes on your own computer | `flatpak install frostyard org.frostyard.Frostnotes` |
 
 Apps use runtimes from Flathub, such as the GNOME runtime. If Flathub is not
 set up, [add it](https://flathub.org/setup) first.
@@ -80,6 +81,41 @@ The approach follows [tuna-os/flatpak-index](https://github.com/tuna-os/flatpak-
 
 The app should install `/app/share/metainfo/APP_ID.metainfo.xml` and its icons,
 or software centres show a bare application ID.
+
+## Stage a candidate
+
+A suite desktop app (frostnotes, frostmail, frostread) gets its listing only
+after a test on a clean desktop installs the release's attested digest from a
+staged catalogue
+([core ADR-0062](https://github.com/frostyard/core/blob/main/docs/adr/0062-make-desktop-suite-apps-standalone-flatpaks-with-opt-in-lodge.md)).
+The staged catalogue is built by the same script, with the digest as the tag,
+and served on the test machine only. Run it from this repository's root:
+
+```bash
+cat > staged.json <<'JSON'
+{"apps": [{"repository": "frostyard/APP", "tags": ["sha256:DIGEST"],
+           "workflow": ".github/workflows/flatpak.yml"}]}
+JSON
+python3 scripts/build-index.py --apps staged.json --site _staged
+python3 -m http.server --bind 127.0.0.1 -d _staged 8765 &
+flatpak remote-add --user --no-gpg-verify \
+  --authenticator-name=org.flatpak.Authenticator.Oci \
+  frostyard-staged oci+http://127.0.0.1:8765
+flatpak install --user frostyard-staged APP_ID
+```
+
+The script verifies the attestation as the publish workflow does, so an
+unattested digest fails here too. Record the digest and this repository's
+commit with the test. Merge the app's `apps.json` entry only when its `latest`
+tag still points to the tested digest:
+
+```bash
+skopeo inspect --format '{{.Digest}}' docker://ghcr.io/frostyard/APP:latest
+```
+
+The staged test gates an app's first listing only. After that, later releases
+list through `latest` with no new staged test (Brian, 2026-10-27); the
+attestation check still gates every digest.
 
 ## Develop
 
