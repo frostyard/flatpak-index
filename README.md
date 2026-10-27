@@ -113,6 +113,10 @@ tag still points to the tested digest:
 skopeo inspect --format '{{.Digest}}' docker://ghcr.io/frostyard/APP:latest
 ```
 
+The staged test gates an app's first listing only. After that, later releases
+list through `latest` with no new staged test (Brian, 2026-10-27); the
+attestation check still gates every digest.
+
 ## Develop
 
 ```bash
