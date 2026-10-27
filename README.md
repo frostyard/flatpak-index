@@ -89,7 +89,7 @@ after a test on a clean desktop installs the release's attested digest from a
 staged catalogue
 ([core ADR-0062](https://github.com/frostyard/core/blob/main/docs/adr/0062-make-desktop-suite-apps-standalone-flatpaks-with-opt-in-lodge.md)).
 The staged catalogue is built by the same script, with the digest as the tag,
-and served on the test machine only:
+and served on the test machine only. Run it from this repository's root:
 
 ```bash
 cat > staged.json <<'JSON'
@@ -97,7 +97,7 @@ cat > staged.json <<'JSON'
            "workflow": ".github/workflows/flatpak.yml"}]}
 JSON
 python3 scripts/build-index.py --apps staged.json --site _staged
-python3 -m http.server -d _staged 8765 &
+python3 -m http.server --bind 127.0.0.1 -d _staged 8765 &
 flatpak remote-add --user --no-gpg-verify \
   --authenticator-name=org.flatpak.Authenticator.Oci \
   frostyard-staged oci+http://127.0.0.1:8765
