@@ -190,6 +190,16 @@ class BuildIndexTest(unittest.TestCase):
         index, _ = self.index([{**APP, "tags": ["latest", "stable"]}])
         self.assertEqual(index["Results"][0]["Images"][0]["Tags"], ["latest", "stable"])
 
+    def test_digest_as_the_tag_lists_that_one_digest(self):
+        latest = self.image("frostyard/igloo", "latest", flatpak_labels("a.B"))
+        digest = self.image("frostyard/igloo", "v1.3.0-rc.1", flatpak_labels("a.C"))
+        self.assertNotEqual(latest, digest)
+        index, _ = self.index([{**APP, "tags": [digest]}])
+        images = index["Results"][0]["Images"]
+        self.assertEqual([i["Digest"] for i in images], [digest])
+        self.assertEqual(images[0]["Tags"], [digest])
+        self.assertEqual([call[0][3] for call in self.gh.calls], [f"oci://ghcr.io/frostyard/igloo@{digest}"])
+
     def test_annotations_are_read_when_the_config_has_no_labels(self):
         self.image("frostyard/igloo", "latest", None, annotations=flatpak_labels("a.B"))
         index, _ = self.index([APP])
@@ -256,6 +266,28 @@ class BuildIndexTest(unittest.TestCase):
                 with mock.patch.object(build_index.subprocess, "run", self.gh.run):
                     with self.assertRaises(build_index.Unverified):
                         self.index([APP])
+
+    def test_release_candidate_tag_verifies(self):
+        digest = self.registry.add_image("frostyard/frostmail", "v0.4.0-rc.1", flatpak_labels("org.frostyard.Frostmail"))
+        self.gh.attest("frostyard/frostmail", digest, ref="refs/tags/v0.4.0-rc.1")
+        index, warnings = self.index(
+            [{"repository": "frostyard/frostmail", "workflow": WORKFLOW, "tags": ["v0.4.0-rc.1"]}])
+        self.assertEqual(warnings, "")
+        self.assertEqual(index["Results"], [{
+            "Name": "frostyard/frostmail",
+            "Images": [{
+                "Digest": digest,
+                "MediaType": OCI_MANIFEST,
+                "OS": "linux",
+                "Architecture": "amd64",
+                "Tags": ["v0.4.0-rc.1"],
+                "Labels": flatpak_labels("org.frostyard.Frostmail"),
+            }],
+        }])
+        command = self.gh.calls[0][0]
+        self.assertIn(digest, command[3])
+        self.assertEqual(command[command.index("--signer-workflow") + 1],
+                         "github.com/frostyard/frostmail/.github/workflows/flatpak.yml")
 
     def test_signer_uri_must_match_the_ref(self):
         digest = self.registry.add_image("frostyard/igloo", "latest", flatpak_labels("a.B"))
@@ -366,6 +398,12 @@ class BuildIndexTest(unittest.TestCase):
     def test_apps_json_names_a_workflow_for_every_app(self):
         for app in json.loads((ROOT / "apps.json").read_text())["apps"]:
             self.assertTrue(app.get("workflow"), app)
+
+    def test_apps_json_lists_only_the_latest_tag(self):
+        # The public catalogue never lists a candidate tag or a digest.
+        for app in json.loads((ROOT / "apps.json").read_text())["apps"]:
+            with self.subTest(repository=app["repository"]):
+                self.assertEqual(app.get("tags", ["latest"]), ["latest"])
 
     def test_site(self):
         self.image("frostyard/igloo", "latest", flatpak_labels("io.github.frostyard.Igloo"))
