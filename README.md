@@ -172,7 +172,8 @@ Record the digest and this repository's commit with the test. Merge the app's
 `apps.json` entry only when its `latest` tag still points to the tested digest:
 
 ```bash
-skopeo inspect --format '{{.Digest}}' docker://ghcr.io/frostyard/APP:latest
+skopeo inspect --no-creds --format '{{.Digest}}' \
+  docker://ghcr.io/frostyard/APP:latest
 ```
 
 The staged test gates an app's first listing only. After that, later releases

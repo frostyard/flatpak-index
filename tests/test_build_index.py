@@ -191,12 +191,14 @@ class BuildIndexTest(unittest.TestCase):
         self.assertEqual(index["Results"][0]["Images"][0]["Tags"], ["latest", "stable"])
 
     def test_digest_as_the_tag_lists_that_one_digest(self):
-        digest = self.image("frostyard/igloo", "latest", flatpak_labels("a.B"))
+        latest = self.image("frostyard/igloo", "latest", flatpak_labels("a.B"))
+        digest = self.image("frostyard/igloo", "v1.3.0-rc.1", flatpak_labels("a.C"))
+        self.assertNotEqual(latest, digest)
         index, _ = self.index([{**APP, "tags": [digest]}])
         images = index["Results"][0]["Images"]
         self.assertEqual([i["Digest"] for i in images], [digest])
         self.assertEqual(images[0]["Tags"], [digest])
-        self.assertIn(digest, self.gh.calls[0][0][3])
+        self.assertEqual([call[0][3] for call in self.gh.calls], [f"oci://ghcr.io/frostyard/igloo@{digest}"])
 
     def test_annotations_are_read_when_the_config_has_no_labels(self):
         self.image("frostyard/igloo", "latest", None, annotations=flatpak_labels("a.B"))
