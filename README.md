@@ -18,6 +18,7 @@ other Flatpak:
 | --- | --- |
 | [Igloo](https://github.com/frostyard/igloo), a terminal for nsl machines and containers | `flatpak install frostyard io.github.frostyard.Igloo` |
 | [Frostnotes](https://github.com/frostyard/frostnotes), plain Markdown notes on your own computer | `flatpak install frostyard org.frostyard.Frostnotes` |
+| [Frostmail](https://github.com/frostyard/frostmail), read and send mail on your own computer | `flatpak install frostyard org.frostyard.Frostmail` |
 
 Apps use runtimes from Flathub, such as the GNOME runtime. If Flathub is not
 set up, [add it](https://flathub.org/setup) first.
