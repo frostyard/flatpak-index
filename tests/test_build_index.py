@@ -417,7 +417,7 @@ class BuildIndexTest(unittest.TestCase):
             self.assertIn("flatpak install --user frostyard io.github.frostyard.Igloo", page)
             self.assertIn("flatpak remote-add --user --if-not-exists frostyard "
                           "https://frostyard.github.io/flatpak-index/frostyard.flatpakrepo", page)
-            self.assertIn("Snow images already have this remote", page)
+            self.assertNotIn("Snow", page)
             self.assertIn("flatpak remote-add --user --if-not-exists flathub", page)
             self.assertNotIn("flatpak remote-add --if-not-exists", page)
 

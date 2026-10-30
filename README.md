@@ -11,8 +11,6 @@ Add the remote once, for your user:
 flatpak remote-add --user --if-not-exists frostyard https://frostyard.github.io/flatpak-index/frostyard.flatpakrepo
 ```
 
-Snow images already have this remote, so Snow users can skip this step.
-
 Then install apps from it, and update them with `flatpak update` like any
 other Flatpak:
 

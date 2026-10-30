@@ -250,7 +250,6 @@ PAGE = """<!doctype html>
 <h1>Frostyard Flatpaks</h1>
 <p>Add the remote once, for your user, then install apps from it and update them with <code>flatpak update</code>.</p>
 <pre>flatpak remote-add --user --if-not-exists frostyard https://frostyard.github.io/flatpak-index/frostyard.flatpakrepo</pre>
-<p>Snow images already have this remote, so Snow users can skip this step.</p>
 <table>
 <tr><th>App</th><th>Architecture</th><th>Install</th></tr>
 @ROWS@
