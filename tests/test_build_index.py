@@ -414,7 +414,12 @@ class BuildIndexTest(unittest.TestCase):
             self.assertEqual(json.loads((site / "index" / "static").read_text()), index)
             self.assertEqual((site / "frostyard.flatpakrepo").read_text(), (ROOT / "frostyard.flatpakrepo").read_text())
             page = (site / "index.html").read_text()
-            self.assertIn("flatpak install frostyard io.github.frostyard.Igloo", page)
+            self.assertIn("flatpak install --user frostyard io.github.frostyard.Igloo", page)
+            self.assertIn("flatpak remote-add --user --if-not-exists frostyard "
+                          "https://frostyard.github.io/flatpak-index/frostyard.flatpakrepo", page)
+            self.assertIn("Snow images already have this remote", page)
+            self.assertIn("flatpak remote-add --user --if-not-exists flathub", page)
+            self.assertNotIn("flatpak remote-add --if-not-exists", page)
 
     def test_flatpakrepo_points_at_the_pages_site(self):
         repo = (ROOT / "frostyard.flatpakrepo").read_text()

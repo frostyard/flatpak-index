@@ -226,7 +226,7 @@ def write_site(index, site, root):
         for image in result["Images"]:
             app_id, arch, branch = label_name(image)
             rows.append(f"<tr><td><code>{html.escape(app_id)}</code></td><td>{html.escape(arch)}</td>"
-                        f"<td><code>flatpak install frostyard {html.escape(app_id)}</code></td></tr>")
+                        f"<td><code>flatpak install --user frostyard {html.escape(app_id)}</code></td></tr>")
     table = "\n".join(rows) or '<tr><td colspan="3">No apps yet.</td></tr>'
     (site / "index.html").write_text(PAGE.replace("@ROWS@", table))
 
@@ -248,14 +248,17 @@ PAGE = """<!doctype html>
 </head>
 <body>
 <h1>Frostyard Flatpaks</h1>
-<p>Add the remote once, then install apps from it and update them with <code>flatpak update</code>.</p>
-<pre>flatpak remote-add --if-not-exists frostyard https://frostyard.github.io/flatpak-index/frostyard.flatpakrepo</pre>
+<p>Add the remote once, for your user, then install apps from it and update them with <code>flatpak update</code>.</p>
+<pre>flatpak remote-add --user --if-not-exists frostyard https://frostyard.github.io/flatpak-index/frostyard.flatpakrepo</pre>
+<p>Snow images already have this remote, so Snow users can skip this step.</p>
 <table>
 <tr><th>App</th><th>Architecture</th><th>Install</th></tr>
 @ROWS@
 </table>
-<p>Apps use runtimes from <a href="https://flathub.org/setup">Flathub</a>; add it too if you have not.
-Source: <a href="https://github.com/frostyard/flatpak-index">frostyard/flatpak-index</a>.</p>
+<p>Apps use runtimes from <a href="https://flathub.org/">Flathub</a>. A <code>--user</code> install gets a missing runtime only from a user remote,
+so add Flathub for your user too:</p>
+<pre>flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo</pre>
+<p>Source: <a href="https://github.com/frostyard/flatpak-index">frostyard/flatpak-index</a>.</p>
 </body>
 </html>
 """
