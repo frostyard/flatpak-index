@@ -5,10 +5,10 @@ A Flatpak remote for Frostyard's apps, served from GitHub Pages at
 
 ## Install apps
 
-Add the remote once:
+Add the remote once, for your user:
 
 ```bash
-flatpak remote-add --if-not-exists frostyard https://frostyard.github.io/flatpak-index/frostyard.flatpakrepo
+flatpak remote-add --user --if-not-exists frostyard https://frostyard.github.io/flatpak-index/frostyard.flatpakrepo
 ```
 
 Then install apps from it, and update them with `flatpak update` like any
@@ -16,12 +16,17 @@ other Flatpak:
 
 | App | Install |
 | --- | --- |
-| [Igloo](https://github.com/frostyard/igloo), a terminal for nsl machines and containers | `flatpak install frostyard io.github.frostyard.Igloo` |
-| [Frostnotes](https://github.com/frostyard/frostnotes), plain Markdown notes on your own computer | `flatpak install frostyard org.frostyard.Frostnotes` |
-| [Frostmail](https://github.com/frostyard/frostmail), read and send mail on your own computer | `flatpak install frostyard org.frostyard.Frostmail` |
+| [Igloo](https://github.com/frostyard/igloo), a terminal for nsl machines and containers | `flatpak install --user frostyard io.github.frostyard.Igloo` |
+| [Frostnotes](https://github.com/frostyard/frostnotes), plain Markdown notes on your own computer | `flatpak install --user frostyard org.frostyard.Frostnotes` |
+| [Frostmail](https://github.com/frostyard/frostmail), read and send mail on your own computer | `flatpak install --user frostyard org.frostyard.Frostmail` |
 
-Apps use runtimes from Flathub, such as the GNOME runtime. If Flathub is not
-set up, [add it](https://flathub.org/setup) first.
+Apps use runtimes from Flathub, such as the GNOME runtime. A `--user` install
+gets a missing runtime only from a user remote, so add Flathub for your user
+too:
+
+```bash
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+```
 
 ## How it works
 
