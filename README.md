@@ -56,9 +56,15 @@ If a digest has no valid attestation, the build fails and nothing is
 deployed; the last deployed site stays live. Images that are missing, private
 or not Flatpaks are skipped.
 
-The workflow runs on every push, every hour, and when an app dispatches it
+The workflow runs on every push, on a schedule, and when an app dispatches it
 after publishing. Because it reads public images, app repositories need no
 credentials for this one.
+
+The schedule asks for every hour (`17 * * * *`), but GitHub delays and drops
+scheduled runs. From 6 to 31 October 2026 it ran 124 times, 3 to 7 times a
+day, with a median gap of 5 hours and a longest gap of 10.6 hours. Only the
+dispatch (step 5 of [Add an app](#add-an-app)) publishes a release at once;
+the schedule is a fallback that can take most of a working day.
 
 The approach follows [tuna-os/flatpak-index](https://github.com/tuna-os/flatpak-index).
 
@@ -79,11 +85,13 @@ The approach follows [tuna-os/flatpak-index](https://github.com/tuna-os/flatpak-
    workflow's path in `"workflow"`, for example
    `".github/workflows/flatpak.yml"`. A digest without a valid attestation
    from that workflow stops the whole deploy.
-5. Optionally, let the app refresh this remote right after it publishes:
-   create a fine-grained token with *Actions: read and write* on this
-   repository only, and save it in the app repository as the secret
-   `FLATPAK_INDEX_DISPATCH_TOKEN`. Without it, the hourly run picks up new
-   images.
+5. Let the app refresh this remote right after it publishes: create a
+   fine-grained token with *Actions: read and write* on this repository only,
+   and save it in the app repository as the secret
+   `FLATPAK_INDEX_DISPATCH_TOKEN`. The app's publish or promote step runs
+   `gh workflow run publish.yml --repo frostyard/flatpak-index` with it, and
+   skips that step when the secret is empty. Without it, only the schedule
+   picks up new images, often hours later (see above).
 
 The app should install `/app/share/metainfo/APP_ID.metainfo.xml` and its icons,
 or software centres show a bare application ID.

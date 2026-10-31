@@ -2,8 +2,10 @@ name: Publish
 
 # Rebuilds the remote from GHCR and deploys it to GitHub Pages. App
 # repositories push images only; the index reads them anonymously, so it needs
-# no credentials for other repositories. Apps can dispatch this workflow after
-# publishing, and the schedule catches up when they cannot. The index lists
+# no credentials for other repositories. Apps dispatch this workflow after
+# publishing (README, "Add an app", step 5). The schedule only catches up when
+# they do not: GitHub delays and drops scheduled runs, so the hourly cron
+# runs every 2 to 10 hours in practice (README). The index lists
 # only digests with a valid attestation. The build fails if one has none, so
 # the deploy job does not run and the last deployed site stays live.
 
