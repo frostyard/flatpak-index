@@ -45,6 +45,7 @@ PRIVATE = {
 }
 COMMIT = 12
 HTTP_TIMEOUT = 60
+CHUNK = 64 * 1024
 RUN_TIMEOUT = 300
 
 
@@ -53,13 +54,26 @@ class Missing(Exception):
 
 
 def fetch(url, timeout=HTTP_TIMEOUT):
-    """Return the body of a GET; each URL carries a token, so no cache answers it twice."""
+    """Return the body of a GET; each URL carries a token, so no cache answers it twice.
+
+    timeout limits the whole fetch, not only each socket operation: the body is
+    read in chunks, and a body that is still arriving after timeout seconds is a
+    TimeoutError. 1 blocked socket operation can add at most timeout seconds.
+    """
+    limit = monotonic() + timeout
     request = urllib.request.Request(url, headers={
         "User-Agent": "frostyard-flatpak-index",
         "Cache-Control": "no-cache",
     })
+    chunks = []
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
+        while True:
+            if monotonic() > limit:
+                raise TimeoutError(f"the body did not arrive within {timeout:g} seconds")
+            chunk = response.read(CHUNK)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
 
 
 def run(command, env, timeout=RUN_TIMEOUT):
@@ -226,8 +240,11 @@ def check_client(site, url, deadline):
 def retry(attempt, deadline, interval):
     """Call attempt(n) until it returns no lines or the deadline passes; return the last lines.
 
-    A new attempt starts only while time is left, and an attempt that passes
-    passes, even when it ends after the deadline.
+    A new attempt starts only while time is left. The deadline is a budget for
+    retries, not a window in which a result is valid: an attempt that passes
+    shows that the live site is right, even when it ends after the deadline.
+    Each operation gets only the time that is left, so the run ends at most 1
+    operation timeout after the deadline.
     """
     number = 0
     lines = ["no time is left to start it"]

@@ -424,5 +424,42 @@ class CheckLiveTest(unittest.TestCase):
         self.assertEqual(check_live.index_pairs(index_body(IGLOO, IGLOO_ARM)), {IGLOO, IGLOO_ARM})
 
 
+class FetchTest(unittest.TestCase):
+    """The real fetch, with a fake urlopen and a fake clock."""
+
+    def slow_response(self, chunks, seconds):
+        clock = {"now": 0.0}
+        parts = list(chunks)
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, size):
+                clock["now"] += seconds
+                return parts.pop(0) if parts else b""
+
+        return clock, Response()
+
+    def test_a_body_that_arrives_in_time_is_returned(self):
+        clock, response = self.slow_response([b"ab", b"cd"], 1)
+        with mock.patch.object(check_live, "monotonic", lambda: clock["now"]), \
+                mock.patch.object(check_live.urllib.request, "urlopen", return_value=response) as urlopen:
+            self.assertEqual(check_live.fetch("https://example.invalid/x", 10), b"abcd")
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 10)
+
+    def test_a_body_that_keeps_arriving_past_the_timeout_fails(self):
+        clock, response = self.slow_response([b"x"] * 100, 5)
+        with mock.patch.object(check_live, "monotonic", lambda: clock["now"]), \
+                mock.patch.object(check_live.urllib.request, "urlopen", return_value=response):
+            with self.assertRaises(TimeoutError):
+                check_live.fetch("https://example.invalid/x", 12)
+        # 1 read can start before the limit and end after it, but no more
+        self.assertLessEqual(clock["now"], 12 + 5)
+
+
 if __name__ == "__main__":
     unittest.main()
