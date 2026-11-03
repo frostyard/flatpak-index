@@ -52,6 +52,13 @@ The remote is an OCI remote, the format Fedora's Flatpak registry uses.
    `org.flatpak.Authenticator.Oci` authenticator named in the `.flatpakrepo`
    file fetches.
 
+After each deploy, the verify job fetches `frostyard.flatpakrepo` and
+`index/static` from the live site, compares them with the deployed artifact,
+and retries for up to 15 minutes because Pages caches a file for 10 minutes.
+Then it adds the remote with `flatpak remote-add --user` in a temporary folder
+and checks that `flatpak remote-ls` lists each built ref with its digest. A red
+verify job does not undo the deploy.
+
 If a digest has no valid attestation, the build fails and nothing is
 deployed; the last deployed site stays live. Images that are missing, private
 or not Flatpaks are skipped.
@@ -206,3 +213,19 @@ python3 scripts/build-index.py --apps apps.json --site _site
 
 GitHub stops scheduled workflows in a public repository after 60 days without
 activity; a push or a manual run restarts them.
+
+To run the live check by hand, for example after a deploy, take the deployed
+artifact of a publish run and compare it with the live site. Run this from this
+repository's root, with `RUN` as the run's ID:
+
+```bash
+gh run download RUN -R frostyard/flatpak-index -n github-pages
+mkdir -p _built && tar -xf artifact.tar -C _built
+python3 scripts/check-live.py --site _built --url https://frostyard.github.io/flatpak-index/
+```
+
+The check needs `flatpak`. It does not change your own Flatpak setup: it adds
+the remote with `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` set to a
+temporary folder, and deletes that folder after each attempt. `--timeout` and
+`--interval` change how long it retries and how long it waits between attempts.
+`.gitignore` ignores `artifact.tar` and `_built/`.
