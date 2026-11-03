@@ -1,12 +1,15 @@
 """Tests for scripts/check-live.py with a fake live site and a fake flatpak."""
 
 import hashlib
+import http.server
 import importlib.util
 import io
 import json
 import os
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 import urllib.error
 from pathlib import Path
@@ -425,40 +428,51 @@ class CheckLiveTest(unittest.TestCase):
 
 
 class FetchTest(unittest.TestCase):
-    """The real fetch, with a fake urlopen and a fake clock."""
+    """The real fetch, against a local HTTP server on the loopback address."""
 
-    def slow_response(self, chunks, seconds):
-        clock = {"now": 0.0}
-        parts = list(chunks)
+    def serve(self, body, delay):
+        """Serve body with its full Content-Length, 1 byte every delay seconds; return the URL."""
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                for n in range(len(body)):
+                    try:
+                        self.wfile.write(body[n:n + 1])
+                        self.wfile.flush()
+                    except OSError:
+                        return
+                    time.sleep(delay)
 
-        class Response:
-            def __enter__(self):
-                return self
+            def log_message(self, *args):
+                pass
 
-            def __exit__(self, *args):
-                return False
-
-            def read(self, size):
-                clock["now"] += seconds
-                return parts.pop(0) if parts else b""
-
-        return clock, Response()
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_address[1]}/x"
 
     def test_a_body_that_arrives_in_time_is_returned(self):
-        clock, response = self.slow_response([b"ab", b"cd"], 1)
-        with mock.patch.object(check_live, "monotonic", lambda: clock["now"]), \
-                mock.patch.object(check_live.urllib.request, "urlopen", return_value=response) as urlopen:
-            self.assertEqual(check_live.fetch("https://example.invalid/x", 10), b"abcd")
-        self.assertEqual(urlopen.call_args.kwargs["timeout"], 10)
+        url = self.serve(b"abcd", 0)
+        self.assertEqual(check_live.fetch(url, 10), b"abcd")
 
     def test_a_body_that_keeps_arriving_past_the_timeout_fails(self):
-        clock, response = self.slow_response([b"x"] * 100, 5)
-        with mock.patch.object(check_live, "monotonic", lambda: clock["now"]), \
-                mock.patch.object(check_live.urllib.request, "urlopen", return_value=response):
-            with self.assertRaises(TimeoutError):
-                check_live.fetch("https://example.invalid/x", 12)
-        # 1 read can start before the limit and end after it, but no more
-        self.assertLessEqual(clock["now"], 12 + 5)
+        # every byte comes well inside the socket timeout, but the body takes
+        # 50 seconds; a buffered read does not return before it is complete
+        url = self.serve(b"x" * 1000, 0.05)
+        started = time.monotonic()
+        with self.assertRaises(TimeoutError):
+            check_live.fetch(url, 0.5)
+        self.assertLess(time.monotonic() - started, 3)
+
+    def test_an_error_of_the_fetch_reaches_the_caller(self):
+        error = urllib.error.URLError("refused")
+        with mock.patch.object(check_live, "fetch_once", side_effect=error):
+            with self.assertRaises(urllib.error.URLError):
+                check_live.fetch("https://example.invalid/x", 5)
 
 
 if __name__ == "__main__":
