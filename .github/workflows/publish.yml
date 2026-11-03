@@ -8,6 +8,10 @@ name: Publish
 # runs every 2 to 10 hours in practice (README). The index lists
 # only digests with a valid attestation. The build fails if one has none, so
 # the deploy job does not run and the last deployed site stays live.
+#
+# After the deploy, the verify job reads the live site back and runs a Flatpak
+# client against it: a stale or broken Pages deploy fails there instead of on a
+# user's machine. A red verify job does not undo the deploy.
 
 on:
   push:
@@ -56,6 +60,38 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  verify:
+    name: Verify the live remote
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: github-pages
+          path: _deployed
+
+      - name: Unpack the deployed artifact
+        run: mkdir _built && tar -xf _deployed/artifact.tar -C _built
+
+      - name: Install flatpak
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak
+
+      - name: Check the live site
+        env:
+          PAGE_URL: ${{ needs.deploy.outputs.page_url }}
+        run: python3 scripts/check-live.py --site _built --url "$PAGE_URL"
