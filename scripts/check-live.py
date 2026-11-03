@@ -9,7 +9,8 @@ away. So this script reads the live site back. It fetches
 frostyard.flatpakrepo and index/static and compares their sha256 digests with
 the built files, then adds the live remote in a temporary folder with
 `flatpak remote-add --user` and checks that `flatpak remote-ls --user` lists
-every built ref with its digest. Both checks retry until 1 deadline passes.
+every built ref with its digest. Both checks retry until 1 deadline passes, and
+every operation gets only the time that is left of that deadline.
 
 A failing check does not undo the deploy. It only makes the run that calls
 this script red.
@@ -33,8 +34,17 @@ from pathlib import Path
 
 REMOTE = "frostyard"
 FILES = ("frostyard.flatpakrepo", "index/static")
-XDG = ("XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME")
+# flatpak reads FLATPAK_USER_DIR before $XDG_DATA_HOME/flatpak, so it needs a
+# subfolder of the temporary folder too: a value inherited from the caller
+# would make remote-add change the real user installation
+PRIVATE = {
+    "XDG_DATA_HOME": "data",
+    "XDG_CONFIG_HOME": "config",
+    "XDG_CACHE_HOME": "cache",
+    "FLATPAK_USER_DIR": "flatpak-user",
+}
 COMMIT = 12
+HTTP_TIMEOUT = 60
 RUN_TIMEOUT = 300
 
 
@@ -42,20 +52,20 @@ class Missing(Exception):
     """The flatpak command is not installed, so no attempt can pass."""
 
 
-def fetch(url):
+def fetch(url, timeout=HTTP_TIMEOUT):
     """Return the body of a GET; each URL carries a token, so no cache answers it twice."""
     request = urllib.request.Request(url, headers={
         "User-Agent": "frostyard-flatpak-index",
         "Cache-Control": "no-cache",
     })
-    with urllib.request.urlopen(request, timeout=60) as response:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read()
 
 
-def run(command, env):
+def run(command, env, timeout=RUN_TIMEOUT):
     """Run a command with a copy of the environment, without a shell."""
     try:
-        return subprocess.run(command, env=env, capture_output=True, text=True, timeout=RUN_TIMEOUT)
+        return subprocess.run(command, env=env, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError as e:
         raise Missing(f"the {command[0]} command was not found; install flatpak to run this check") from e
 
@@ -81,11 +91,41 @@ def sha256(body):
 
 
 def index_pairs(body):
-    """The (ref, digest) pairs of an index/static document; the digest has no sha256: prefix."""
+    """The (ref, digest) pairs of an index/static document; the digest has no sha256: prefix.
+
+    Raise ValueError with a short reason when the document is not the index that
+    build-index.py writes: a body from a broken deploy must not crash a check.
+    """
+    try:
+        document = json.loads(body)
+    except ValueError as e:
+        raise ValueError(f"it is not JSON: {e}") from e
+    if not isinstance(document, dict):
+        raise ValueError("the document is not a JSON object")
+    results = document.get("Results")
+    if not isinstance(results, list):
+        raise ValueError('it has no "Results" list')
     pairs = set()
-    for result in json.loads(body).get("Results") or []:
-        for image in result.get("Images") or []:
-            pairs.add((image["Labels"]["org.flatpak.ref"], image["Digest"].removeprefix("sha256:")))
+    for n, result in enumerate(results):
+        if not isinstance(result, dict):
+            raise ValueError(f"Results[{n}] is not an object")
+        images = result.get("Images")
+        if not isinstance(images, list):
+            raise ValueError(f'Results[{n}] has no "Images" list')
+        for m, image in enumerate(images):
+            where = f"Results[{n}].Images[{m}]"
+            if not isinstance(image, dict):
+                raise ValueError(f"{where} is not an object")
+            digest = image.get("Digest")
+            if not isinstance(digest, str) or not digest:
+                raise ValueError(f'{where} has no "Digest" string')
+            labels = image.get("Labels")
+            if not isinstance(labels, dict):
+                raise ValueError(f'{where} has no "Labels" object')
+            ref = labels.get("org.flatpak.ref")
+            if not isinstance(ref, str) or not ref:
+                raise ValueError(f'{where} has no "org.flatpak.ref" string')
+            pairs.add((ref, digest.removeprefix("sha256:")))
     return pairs
 
 
@@ -93,8 +133,8 @@ def describe_index(live, built):
     """The images that only 1 of the 2 index documents lists."""
     try:
         live_pairs = index_pairs(live)
-    except (ValueError, KeyError, TypeError):
-        return ["index/static: the live body is not an index"]
+    except ValueError as e:
+        return [f"index/static: the live body is not an index: {e}"]
     built_pairs = index_pairs(built)
     lines = [f"index/static: only in the built index: {ref} {digest}"
              for ref, digest in sorted(built_pairs - live_pairs)]
@@ -103,14 +143,18 @@ def describe_index(live, built):
     return lines
 
 
-def check_files(site, url, attempt):
+def check_files(site, url, attempt, deadline):
     """Compare the live files with the built ones; return the lines that describe each difference."""
     lines = []
     for rel in FILES:
+        left = deadline - monotonic()
+        if left <= 0:
+            lines.append(f"{rel}: no time is left to fetch it")
+            break
         built = (site / rel).read_bytes()
         # the token changes on each attempt, so a stale CDN copy cannot answer
         try:
-            live = fetch(f"{url}{rel}?check={attempt}-{time.time_ns()}")
+            live = fetch(f"{url}{rel}?check={attempt}-{time.time_ns()}", min(HTTP_TIMEOUT, left))
         except (OSError, ValueError, http.client.HTTPException) as e:
             lines.append(f"{rel}: cannot fetch it: {e}")
             continue
@@ -137,25 +181,33 @@ def match_listing(lines, expected):
     return expected - matched, extra
 
 
-def check_client(site, url):
+def check_client(site, url, deadline):
     """Add the live remote in a temporary folder and compare its listing with the built index."""
     expected = index_pairs((site / "index" / "static").read_bytes())
     folder = tempfile.mkdtemp(prefix="check-live-")
     listing = []
     try:
         env = dict(os.environ)
-        for name in XDG:
-            env[name] = os.path.join(folder, name.lower())
+        for name, sub in PRIVATE.items():
+            env[name] = os.path.join(folder, sub)
             os.mkdir(env[name])
         try:
+            left = deadline - monotonic()
+            if left <= 0:
+                return ["no time is left to add the remote"]
+            timeout = min(RUN_TIMEOUT, left)
             add = run(["flatpak", "remote-add", "--user", "--if-not-exists", REMOTE,
-                       f"{url}frostyard.flatpakrepo"], env)
+                       f"{url}frostyard.flatpakrepo"], env, timeout)
             if add.returncode != 0:
                 return [f"flatpak remote-add exited with {add.returncode}: {tail(add.stderr)}"]
+            left = deadline - monotonic()
+            if left <= 0:
+                return ["no time is left to list the remote"]
+            timeout = min(RUN_TIMEOUT, left)
             listed = run(["flatpak", "remote-ls", "--user", REMOTE, "--arch=*",
-                          "--columns=ref,commit"], env)
+                          "--columns=ref,commit"], env, timeout)
         except subprocess.TimeoutExpired:
-            return [f"flatpak did not finish within {RUN_TIMEOUT} seconds"]
+            return [f"flatpak did not finish within {timeout:g} seconds"]
         if listed.returncode != 0:
             return [f"flatpak remote-ls exited with {listed.returncode}: {tail(listed.stderr)}"]
         listing = [line for line in listed.stdout.splitlines() if line.strip()]
@@ -172,9 +224,17 @@ def check_client(site, url):
 
 
 def retry(attempt, deadline, interval):
-    """Call attempt(n) until it returns no lines or the deadline passes; return the last lines."""
+    """Call attempt(n) until it returns no lines or the deadline passes; return the last lines.
+
+    A new attempt starts only while time is left, and an attempt that passes
+    passes, even when it ends after the deadline.
+    """
     number = 0
+    lines = ["no time is left to start it"]
     while True:
+        left = deadline - monotonic()
+        if left <= 0:
+            return lines
         number += 1
         lines = attempt(number)
         if not lines:
@@ -182,9 +242,8 @@ def retry(attempt, deadline, interval):
         for line in lines:
             print(f"attempt {number}: {line}", file=sys.stderr)
         left = deadline - monotonic()
-        if left <= 0:
-            return lines
-        sleep(min(interval, left))
+        if left > 0:
+            sleep(min(interval, left))
 
 
 def main(argv=None):
@@ -204,10 +263,16 @@ def main(argv=None):
         print(f"error: {args.site} has no {', '.join(missing)}; --site needs a built site", file=sys.stderr)
         sys.exit(1)
 
+    try:
+        pairs = index_pairs((args.site / "index" / "static").read_bytes())
+    except (OSError, ValueError) as e:
+        print(f"error: the built index at {args.site} is not an index: {e}", file=sys.stderr)
+        sys.exit(1)
+
     deadline = monotonic() + args.timeout
     checks = (
-        ("files", lambda number: check_files(args.site, url, number)),
-        ("client", lambda number: check_client(args.site, url)),
+        ("files", lambda number: check_files(args.site, url, number, deadline)),
+        ("client", lambda number: check_client(args.site, url, deadline)),
     )
     try:
         for name, attempt in checks:
@@ -220,8 +285,7 @@ def main(argv=None):
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    count = len(index_pairs((args.site / "index" / "static").read_bytes()))
-    print(f"The live remote at {url} serves the built index: {count} image(s), "
+    print(f"The live remote at {url} serves the built index: {len(pairs)} image(s), "
           f"and flatpak remote-ls lists them.")
 
 
