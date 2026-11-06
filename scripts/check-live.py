@@ -8,7 +8,7 @@ those failures: the deploy job is green, and the next publish can be hours
 away. So this script reads the live site back. It fetches
 frostyard.flatpakrepo and index/static and compares their sha256 digests with
 the built files, then adds the live remote in a temporary folder with
-`flatpak remote-add --user` and checks that `flatpak remote-ls --user` lists
+`flatpak remote-add --user` and checks that `flatpak remote-ls --user --all` lists
 every built ref with its digest. Both checks retry until 1 deadline passes, and
 every operation gets only the time that is left of that deadline.
 
@@ -232,7 +232,8 @@ def check_client(site, url, deadline):
             if left <= 0:
                 return ["no time is left to list the remote"]
             timeout = min(RUN_TIMEOUT, left)
-            listed = run(["flatpak", "remote-ls", "--user", REMOTE, "--arch=*",
+            # --all, because remote-ls hides end-of-life refs without it
+            listed = run(["flatpak", "remote-ls", "--user", REMOTE, "--all", "--arch=*",
                           "--columns=ref,commit"], env, timeout)
         except subprocess.TimeoutExpired:
             return [f"flatpak did not finish within {timeout:g} seconds"]

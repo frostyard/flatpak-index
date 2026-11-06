@@ -18,10 +18,19 @@ blob matches its sha256 digest, so the labels come from the verified image.
 Images that are missing, private or not Flatpaks are skipped, in that order of
 checks: a Flatpak check comes only after the verification.
 
+An image can mark its ref as end-of-life in favour of another ref (`flatpak
+build-commit-from --end-of-life-rebase`), so that `flatpak update` moves users
+to the new app ID. Such an image is listed only when the index also lists its
+target ref; else it is skipped. An app that renames its ID moves `latest` to
+the new ID before it tags the end-of-life image, and one run can read the old
+`latest` and the new end-of-life tag. Without the check, that run would
+publish a rebase to a ref that the remote does not have.
+
 Usage: build-index.py --apps apps.json --site _site
 """
 
 import argparse
+import base64
 import html
 import hashlib
 import json
@@ -47,6 +56,10 @@ INDEX_TYPES = [
 
 
 TAG_REF = re.compile(r"refs/tags/v[0-9][^/]*")
+
+# flatpak build-bundle --oci writes each commit metadata key as a label with
+# this prefix; the value is the base64 of a serialized GVariant of type "v".
+EOL_REBASE = "org.flatpak.commit-metadata.ostree.endoflife-rebase"
 
 
 class Missing(Exception):
@@ -182,6 +195,63 @@ def image_entries(repository, tag, workflow):
     return entries
 
 
+def rebase_target(labels):
+    """The ref that an end-of-life image rebases to; None when it has no rebase.
+
+    Flatpak decodes the label as the base64 of a GVariant of type "v" that holds
+    a string: the string's bytes, a NUL, then a NUL and the type "s". Raise
+    ValueError when the label is there but is not that.
+    """
+    if EOL_REBASE not in labels:
+        return None
+    value = labels[EOL_REBASE]
+    if not isinstance(value, str):
+        raise ValueError(f"{EOL_REBASE} is not a string")
+    try:
+        data = base64.b64decode(value, validate=True)
+    except ValueError as e:  # binascii.Error, or a character that is not ASCII
+        raise ValueError(f"{EOL_REBASE} is not base64: {e}") from e
+    if not data.endswith(b"\0\0s") or b"\0" in data[:-3]:
+        raise ValueError(f"{EOL_REBASE} is not a serialized GVariant string")
+    try:
+        target = data[:-3].decode()
+    except UnicodeDecodeError as e:
+        raise ValueError(f"{EOL_REBASE} is not UTF-8: {e}") from e
+    if not target:
+        raise ValueError(f"{EOL_REBASE} is empty")
+    return target
+
+
+def drop_orphan_rebases(results):
+    """Skip each image whose end-of-life rebase target ref is not in the index.
+
+    Repeat until nothing changes, so that a chain of rebases ends at a listed ref.
+    """
+    while True:
+        refs = {image["Labels"]["org.flatpak.ref"] for result in results for image in result["Images"]}
+        dropped = False
+        for result in results:
+            kept = []
+            for image in result["Images"]:
+                where = f'{result["Name"]}:{",".join(image["Tags"])} ({image["Digest"]})'
+                try:
+                    target = rebase_target(image["Labels"])
+                except ValueError as e:
+                    print(f"warning: {where}: {e}; skipped", file=sys.stderr)
+                    dropped = True
+                    continue
+                if target is not None and target not in refs:
+                    print(f"warning: {where} rebases to {target}, which the index does not list; skipped",
+                          file=sys.stderr)
+                    dropped = True
+                    continue
+                kept.append(image)
+            result["Images"] = kept
+        results[:] = [result for result in results if result["Images"]]
+        if not dropped:
+            return results
+
+
 def build_index(apps):
     """The index/static document for the apps in an apps.json document."""
     for app in apps["apps"]:
@@ -205,7 +275,7 @@ def build_index(apps):
                     images[entry["Digest"]] = entry
         if images:
             results.append({"Name": repository, "Images": list(images.values())})
-    return {"Registry": REGISTRY, "Results": results}
+    return {"Registry": REGISTRY, "Results": drop_orphan_rebases(results)}
 
 
 def label_name(image):

@@ -16,7 +16,7 @@ other Flatpak:
 
 | App | Install |
 | --- | --- |
-| [Igloo](https://github.com/frostyard/igloo), a terminal for nsl machines and containers | `flatpak install --user frostyard io.github.frostyard.Igloo` |
+| [Igloo](https://github.com/frostyard/igloo), a terminal for nsl machines and containers | `flatpak install --user frostyard org.frostyard.Igloo` |
 | [Frostnotes](https://github.com/frostyard/frostnotes), plain Markdown notes on your own computer | `flatpak install --user frostyard org.frostyard.Frostnotes` |
 | [Frostmail](https://github.com/frostyard/frostmail), read and send mail on your own computer | `flatpak install --user frostyard org.frostyard.Frostmail` |
 
@@ -103,6 +103,29 @@ The approach follows [tuna-os/flatpak-index](https://github.com/tuna-os/flatpak-
 The app should install `/app/share/metainfo/APP_ID.metainfo.xml` and its icons,
 or software centres show a bare application ID.
 
+## Rename an app ID
+
+When an app changes its Flatpak ID, installed copies of the old ID move to the
+new one on `flatpak update`, through an end-of-life rebase:
+
+1. The app's release workflow moves `latest` to the new ID. Then it builds an
+   image of the old ID with
+   `flatpak build-commit-from --end-of-life-rebase=OLD_ID=NEW_ID`, attests it,
+   and tags it with the old ID, for example
+   `ghcr.io/frostyard/igloo:io.github.frostyard.Igloo`.
+2. Its `apps.json` entry lists that tag after `latest`, for example
+   `"tags": ["latest", "io.github.frostyard.Igloo"]`. A tag that does not
+   exist yet is skipped, so this change can merge before the app's first
+   release with the new ID.
+
+The build lists an end-of-life image only when the index also lists the ref
+that it rebases to. One run can read the old `latest` and the new end-of-life
+tag, because the app moves them one after the other; that run skips the
+end-of-life image and keeps the old one, and the next run lists both.
+
+The verify job lists the live remote with `flatpak remote-ls --all`, because
+`remote-ls` hides end-of-life refs without it.
+
 ## Stage a candidate
 
 A suite desktop app (frostnotes, frostmail, frostread) gets its listing only
@@ -119,7 +142,8 @@ same digest to `vX.Y.Z` and `latest`, so the public catalogue lists the digest
 that was tested, with the candidate's attestation.
 
 The staged catalogue is never deployed: only `apps.json` is published, and a
-test keeps every `apps.json` tag at `latest`.
+test keeps every `apps.json` tag at `latest` or at an old app ID (see
+[Rename an app ID](#rename-an-app-id)).
 
 ### A. Build the staged catalogue
 

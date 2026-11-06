@@ -1,9 +1,11 @@
 """Tests for scripts/build-index.py with a fake GHCR."""
 
+import base64
 import hashlib
 import importlib.util
 import io
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -22,6 +24,17 @@ OCI_INDEX = "application/vnd.oci.image.index.v1+json"
 
 def flatpak_labels(app_id, arch="x86_64"):
     return {"org.flatpak.ref": f"app/{app_id}/{arch}/master", "org.flatpak.metadata": "[Application]\n"}
+
+
+def gvariant_v_string(value):
+    """What flatpak build-bundle --oci writes for a string in the commit metadata."""
+    return base64.b64encode(value.encode() + b"\0\0s").decode()
+
+
+def eol_labels(old_id, new_id, arch="x86_64"):
+    """The labels of an image that marks old_id end-of-life in favour of new_id."""
+    return {**flatpak_labels(old_id, arch),
+            build_index.EOL_REBASE: gvariant_v_string(f"app/{new_id}/{arch}/master")}
 
 
 WORKFLOW = ".github/workflows/flatpak.yml"
@@ -399,11 +412,104 @@ class BuildIndexTest(unittest.TestCase):
         for app in json.loads((ROOT / "apps.json").read_text())["apps"]:
             self.assertTrue(app.get("workflow"), app)
 
-    def test_apps_json_lists_only_the_latest_tag(self):
-        # The public catalogue never lists a candidate tag or a digest.
+    def test_apps_json_lists_only_latest_and_old_app_ids(self):
+        # The public catalogue never lists a candidate tag or a digest: only
+        # latest, then the end-of-life tags of renamed app IDs.
+        old_id = re.compile(r"[A-Za-z][\w-]*(\.[A-Za-z][\w-]*){2,}")
         for app in json.loads((ROOT / "apps.json").read_text())["apps"]:
             with self.subTest(repository=app["repository"]):
-                self.assertEqual(app.get("tags", ["latest"]), ["latest"])
+                tags = app.get("tags", ["latest"])
+                self.assertEqual(tags[0], "latest")
+                for tag in tags[1:]:
+                    self.assertRegex(tag, old_id)
+                    self.assertFalse(tag.startswith("v"), tag)
+
+    def test_igloo_keeps_its_old_app_id_tag(self):
+        # Installed copies of the old ID need the end-of-life image to see the rebase.
+        apps = {app["repository"]: app for app in json.loads((ROOT / "apps.json").read_text())["apps"]}
+        self.assertEqual(apps["frostyard/igloo"]["tags"], ["latest", "io.github.frostyard.Igloo"])
+
+    def test_old_app_id_tag_that_does_not_exist_yet_is_skipped(self):
+        # apps.json can list the end-of-life tag before the app's first release with the new ID.
+        self.image("frostyard/igloo", "latest", flatpak_labels("io.github.frostyard.Igloo"))
+        index, warnings = self.index([{**APP, "tags": ["latest", "io.github.frostyard.Igloo"]}])
+        images = index["Results"][0]["Images"]
+        self.assertEqual([i["Labels"]["org.flatpak.ref"] for i in images],
+                         ["app/io.github.frostyard.Igloo/x86_64/master"])
+        self.assertIn("no public image for frostyard/igloo:io.github.frostyard.Igloo: HTTP 404", warnings)
+
+    def test_end_of_life_image_is_listed_with_its_target(self):
+        self.image("frostyard/igloo", "latest", flatpak_labels("org.frostyard.Igloo"))
+        eol = self.image("frostyard/igloo", "io.github.frostyard.Igloo",
+                         eol_labels("io.github.frostyard.Igloo", "org.frostyard.Igloo"))
+        index, warnings = self.index([{**APP, "tags": ["latest", "io.github.frostyard.Igloo"]}])
+        images = index["Results"][0]["Images"]
+        self.assertEqual([(i["Labels"]["org.flatpak.ref"], i["Tags"]) for i in images], [
+            ("app/org.frostyard.Igloo/x86_64/master", ["latest"]),
+            ("app/io.github.frostyard.Igloo/x86_64/master", ["io.github.frostyard.Igloo"]),
+        ])
+        self.assertEqual(images[1]["Digest"], eol)
+        self.assertEqual(warnings, "")
+
+    def test_end_of_life_image_without_its_target_is_skipped(self):
+        # One run read the old latest, then the new end-of-life tag.
+        self.image("frostyard/igloo", "latest", flatpak_labels("io.github.frostyard.Igloo"))
+        eol = self.image("frostyard/igloo", "io.github.frostyard.Igloo",
+                         eol_labels("io.github.frostyard.Igloo", "org.frostyard.Igloo"))
+        index, warnings = self.index([{**APP, "tags": ["latest", "io.github.frostyard.Igloo"]}])
+        images = index["Results"][0]["Images"]
+        self.assertEqual([i["Tags"] for i in images], [["latest"]])
+        self.assertIn(f"frostyard/igloo:io.github.frostyard.Igloo ({eol}) rebases to "
+                      "app/org.frostyard.Igloo/x86_64/master, which the index does not list; skipped", warnings)
+
+    def test_end_of_life_target_must_match_the_arch(self):
+        self.image("frostyard/igloo", "latest", flatpak_labels("org.frostyard.Igloo", "aarch64"), arch="arm64")
+        self.image("frostyard/igloo", "old", eol_labels("io.github.frostyard.Igloo", "org.frostyard.Igloo"))
+        index, warnings = self.index([{**APP, "tags": ["latest", "old"]}])
+        self.assertEqual([i["Tags"] for i in index["Results"][0]["Images"]], [["latest"]])
+        self.assertIn("which the index does not list", warnings)
+
+    def test_end_of_life_target_can_be_in_another_repository(self):
+        self.image("frostyard/new", "latest", flatpak_labels("org.frostyard.New"))
+        self.image("frostyard/old", "latest", eol_labels("org.frostyard.Old", "org.frostyard.New"))
+        index, warnings = self.index([{**APP, "repository": "frostyard/old"}, {**APP, "repository": "frostyard/new"}])
+        self.assertEqual([r["Name"] for r in index["Results"]], ["frostyard/old", "frostyard/new"])
+        self.assertEqual(warnings, "")
+
+    def test_end_of_life_chain_is_skipped_when_its_end_is_missing(self):
+        # A rebases to B, B rebases to C, and C is not listed: both go.
+        self.image("frostyard/igloo", "a", eol_labels("org.frostyard.A", "org.frostyard.B"))
+        self.image("frostyard/igloo", "b", eol_labels("org.frostyard.B", "org.frostyard.C"))
+        self.image("frostyard/other", "latest", flatpak_labels("org.frostyard.Other"))
+        index, warnings = self.index([{**APP, "tags": ["a", "b"]}, {**APP, "repository": "frostyard/other"}])
+        self.assertEqual([r["Name"] for r in index["Results"]], ["frostyard/other"])
+        self.assertIn("rebases to app/org.frostyard.C/x86_64/master", warnings)
+        self.assertIn("rebases to app/org.frostyard.B/x86_64/master", warnings)
+
+    def test_malformed_rebase_label_is_skipped(self):
+        self.image("frostyard/igloo", "latest", flatpak_labels("org.frostyard.Igloo"))
+        target = "app/org.frostyard.Igloo/x86_64/master"
+        bad = {
+            "not base64": "not base64!",
+            "not a string variant": base64.b64encode(target.encode() + b"\0\0u").decode(),
+            "empty": gvariant_v_string(""),
+            "inner NUL": gvariant_v_string("app/a\0b"),
+            "null": None,
+            "not a string": 5,
+        }
+        for n, (name, value) in enumerate(bad.items()):
+            self.image("frostyard/igloo", f"bad{n}",
+                       {**flatpak_labels(f"org.frostyard.Bad{n}"), build_index.EOL_REBASE: value})
+        index, warnings = self.index([{**APP, "tags": ["latest"] + [f"bad{n}" for n in range(len(bad))]}])
+        self.assertEqual([i["Tags"] for i in index["Results"][0]["Images"]], [["latest"]])
+        self.assertEqual(warnings.count("; skipped"), len(bad), warnings)
+
+    def test_rebase_target_reads_what_flatpak_writes(self):
+        # bytes from GLib: Variant('v', Variant('s', ref)).get_data_as_bytes()
+        value = base64.b64encode(b"app/org.frostyard.Igloo/x86_64/master\x00\x00s").decode()
+        self.assertEqual(build_index.rebase_target({build_index.EOL_REBASE: value}),
+                         "app/org.frostyard.Igloo/x86_64/master")
+        self.assertIsNone(build_index.rebase_target(flatpak_labels("a.B")))
 
     def test_site(self):
         self.image("frostyard/igloo", "latest", flatpak_labels("io.github.frostyard.Igloo"))
