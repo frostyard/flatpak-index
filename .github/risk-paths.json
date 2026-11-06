@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "paths": [
+    {
+      "glob": ".github/risk-paths.json",
+      "why": "governance: the high-risk path list itself"
+    },
+    {
+      "glob": ".github/workflows/**",
+      "why": "publication: the build, deploy and verify workflows, the Pages deploy token permissions, and the risk-paths caller"
+    },
+    {
+      "glob": "scripts/**",
+      "why": "publication: the attestation verification policy of the index and the live check of the published remote"
+    },
+    {
+      "glob": "apps.json",
+      "why": "publication: which repositories and signer workflows the index trusts"
+    },
+    {
+      "glob": "frostyard.flatpakrepo",
+      "why": "publication: the remote URL and authenticator that users install"
+    },
+    {
+      "glob": "tests/**",
+      "why": "governance: the checks of the verification policy and of the workflows"
+    },
+    {
+      "glob": "Makefile",
+      "why": "governance: the verify gate"
+    },
+    {
+      "glob": "mise.toml",
+      "why": "governance: the tool pins that CI installs"
+    },
+    {
+      "glob": "mise.lock",
+      "why": "governance: the checksums of the tools that CI installs"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 USES = re.compile(r"^\s*(?:-\s+)?uses:\s*(\S+)(.*)$", re.M)
 PINNED = re.compile(r"^[\w.-]+/[\w.-]+(/[\w./-]+)?@[0-9a-f]{40}$")
 VERSION = re.compile(r"\s+# v\d[\w.-]*\s*")
+CORE_MAIN = re.compile(r"^\s+# frostyard/core main, \d{4}-\d{2}-\d{2}\b")
 JOB = re.compile(r"^  ([\w-]+):\s*$", re.M)
 
 
@@ -30,7 +31,11 @@ class WorkflowsTest(unittest.TestCase):
                     continue
                 count += 1
                 self.assertRegex(target, PINNED, f"{path.name}: {target} is not pinned to a commit")
-                self.assertRegex(rest, VERSION, f"{path.name}: {target} needs a '# vX.Y.Z' comment")
+                if target.startswith("frostyard/core/"):
+                    # core has no release tags: its reusable workflows name the day of main they pin
+                    self.assertRegex(rest, CORE_MAIN, f"{path.name}: {target} needs a '# frostyard/core main, YYYY-MM-DD' comment")
+                else:
+                    self.assertRegex(rest, VERSION, f"{path.name}: {target} needs a '# vX.Y.Z' comment")
         self.assertGreater(count, 0)
 
     def test_publish_verifies_the_live_site(self):
