@@ -133,7 +133,9 @@ def workflows(root):
     folder = Path(root) / ".github" / "workflows"
     if not folder.is_dir():
         return []
-    return [(path, path.read_text(encoding="utf-8")) for path in sorted(folder.glob("*.yml"))]
+    # GitHub runs both extensions, so a .yaml workflow must not escape the checks
+    paths = sorted([*folder.glob("*.yml"), *folder.glob("*.yaml")])
+    return [(path, path.read_text(encoding="utf-8")) for path in paths]
 
 
 def indented_block(lines, start):
@@ -328,7 +330,7 @@ def check_b5(root):
     """
     files = workflows(root)
     if not files:
-        fail("B5", "there is no .github/workflows/*.yml")
+        fail("B5", "there is no .github/workflows/*.yml or *.yaml")
     for path, text in files:
         value, granted = top_permissions(text)
         if value is None:
@@ -996,6 +998,28 @@ class NegativeTest(unittest.TestCase):
     def test_b6_a_glob_that_misses_apps_json(self):
         self.break_file(RISK_LIST, '"glob": "apps.json"', '"glob": "apps/*.json"')
         self.assert_broken("B6")
+
+    def test_b5_a_yaml_workflow_that_keeps_credentials(self):
+        (self.root / ".github" / "workflows" / "extra.yaml").write_text(
+            "name: Extra\n"
+            "on: [pull_request]\n"
+            "permissions: {}\n"
+            "jobs:\n"
+            "  extra:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n",
+            encoding="utf-8")
+        with self.assertRaises(BaselineError) as caught:
+            CHECKS["B5"](self.root)
+        self.assertIn("extra.yaml", str(caught.exception))
+
+    def test_b5_a_yaml_workflow_with_write_permission(self):
+        (self.root / ".github" / "workflows" / "extra.yaml").write_text(
+            "name: Extra\non: [pull_request]\npermissions:\n  contents: write\njobs: {}\n", encoding="utf-8")
+        with self.assertRaises(BaselineError) as caught:
+            CHECKS["B5"](self.root)
+        self.assertIn("extra.yaml", str(caught.exception))
 
     def test_b6_a_why_without_a_category(self):
         self.break_file(RISK_LIST, '"why": "governance: the verify gate"', '"why": "the verify gate"')

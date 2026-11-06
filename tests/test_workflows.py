@@ -1,6 +1,7 @@
 """Tests for the GitHub Actions workflows."""
 
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -20,9 +21,21 @@ def job_blocks(text):
             for n, match in enumerate(starts)}
 
 
+def workflow_files(folder):
+    """Every workflow file; GitHub runs both .yml and .yaml."""
+    return sorted([*folder.glob("*.yml"), *folder.glob("*.yaml")])
+
+
 class WorkflowsTest(unittest.TestCase):
+    def test_yaml_workflows_are_read_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / "a.yml").write_text("")
+            (folder / "b.yaml").write_text("")
+            self.assertEqual([p.name for p in workflow_files(folder)], ["a.yml", "b.yaml"])
+
     def test_actions_are_pinned_to_commits(self):
-        files = sorted(WORKFLOWS.glob("*.yml"))
+        files = workflow_files(WORKFLOWS)
         self.assertTrue(files)
         count = 0
         for path in files:
