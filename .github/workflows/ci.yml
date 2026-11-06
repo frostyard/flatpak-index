@@ -17,5 +17,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Test
-        run: python3 -m unittest discover -s tests -v
+      # The tools come from mise.toml and mise.lock (core ADR-0043), the same
+      # set a developer gets from `mise install`.
+      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+
+      - run: make ci
