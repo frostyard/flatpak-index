@@ -76,7 +76,7 @@ PERMISSION_ITEM = re.compile(r"^(\s+)([\w-]+):\s*(\S+)\s*$")
 LIST_ITEM = re.compile(r"^(\s*)-(?:\s(.*))?$")
 JOB = re.compile(r"^ {2}([\w-]+):\s*$")
 RUN_MAKE_CI = re.compile(r"^\s*(?:-\s+)?run:\s*make ci\s*$")
-STEP_IF = re.compile(r"^\s*if:")
+STEP_IF = re.compile(r"^\s*(?:-\s+)?if:")
 JOB_IF = re.compile(r"^ {4}if:")
 
 README_KINDS = {
@@ -308,7 +308,7 @@ def check_b4(root):
         fail("B4", "Makefile is missing")
     rules = {}
     for line in text.splitlines():
-        match = re.match(r"^([\w-]+):\s*([^=]*)$", line)
+        match = re.match(r"^([\w-]+):\s*([^=#]*)(?:#.*)?$", line)
         if match:
             rules[match.group(1)] = match.group(2).split()
     for target in ("verify", "check", "ci"):
@@ -434,13 +434,23 @@ def match(glob, path):
     return re.fullmatch(pattern, path) is not None
 
 
+def strict_object(pairs):
+    """A JSON object that refuses a duplicate key, as core's parseStrictJson does."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate key {key!r}")
+        result[key] = value
+    return result
+
+
 def check_b6(root):
     """.github/risk-paths.json by the risk-paths spec, and the caller workflow."""
     text = read(root, RISK_LIST)
     if text is None:
         fail("B6", f"{RISK_LIST} is missing")
     try:
-        document = json.loads(text)
+        document = json.loads(text, object_pairs_hook=strict_object)
     except ValueError as error:
         fail("B6", f"{RISK_LIST} is not JSON: {error}")
     if not isinstance(document, dict):
@@ -971,6 +981,10 @@ class NegativeTest(unittest.TestCase):
         self.break_file("Makefile", "ci: verify", "ci: help")
         self.assert_broken("B4")
 
+    def test_b4_verify_named_only_in_the_comment(self):
+        self.break_file("Makefile", "ci: verify ## CI gate", "ci: help ## runs verify")
+        self.assert_broken("B4")
+
     def test_b5_a_checkout_that_keeps_credentials(self):
         self.break_file(".github/workflows/ci.yml", "          persist-credentials: false\n", "")
         self.assert_broken("B5")
@@ -996,6 +1010,14 @@ class NegativeTest(unittest.TestCase):
 
     def test_b6_an_unknown_top_level_key(self):
         self.break_file(RISK_LIST, '"schema_version": 1', '"schema_version": 1,\n  "owners": []')
+        self.assert_broken("B6")
+
+    def test_b6_a_duplicate_top_level_key(self):
+        self.break_file(".github/risk-paths.json", '"schema_version": 1,', '"schema_version": 1,\n  "schema_version": 1,')
+        self.assert_broken("B6")
+
+    def test_b6_a_duplicate_entry_key(self):
+        self.break_file(".github/risk-paths.json", '"glob": "apps.json",', '"glob": "apps.json",\n      "glob": "apps.json",')
         self.assert_broken("B6")
 
     def test_b6_a_duplicate_glob(self):
@@ -1033,6 +1055,10 @@ class NegativeTest(unittest.TestCase):
 
     def test_b12_an_if_false_on_the_job(self):
         self.break_file(".github/workflows/ci.yml", "  test:\n", "  test:\n    if: false\n")
+        self.assert_broken("B12")
+
+    def test_b12_an_if_false_as_the_first_key_of_the_step(self):
+        self.break_file(".github/workflows/ci.yml", "      - run: make ci", "      - if: false\n        run: make ci")
         self.assert_broken("B12")
 
     def test_b12_an_if_false_on_the_step(self):
@@ -1155,8 +1181,10 @@ class StepTest(unittest.TestCase):
     def test_a_write_permission_below_the_top_level_is_allowed(self):
         root = self.write("      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
                           "        with:\n"
-                          "          persist-credentials: false\n"
-                          "    # a job may grant more than read\n")
+                          "          persist-credentials: false\n")
+        path = root / ".github" / "workflows" / "ci.yml"
+        path.write_text(path.read_text().replace("      contents: read\n", "      contents: write\n"))
+        self.assertIn("contents: write", path.read_text())
         check_b5(root)
 
 
