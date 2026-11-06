@@ -168,7 +168,7 @@ class CheckLiveTest(unittest.TestCase):
             "flatpak", "remote-add", "--user", "--if-not-exists", "frostyard",
             URL + "frostyard.flatpakrepo"]])
         self.assertEqual(self.flatpak.commands("remote-ls"), [[
-            "flatpak", "remote-ls", "--user", "frostyard", "--arch=*", "--columns=ref,commit"]])
+            "flatpak", "remote-ls", "--user", "frostyard", "--all", "--arch=*", "--columns=ref,commit"]])
         _, _, kwargs = self.flatpak.calls[0]
         self.assertNotIn("shell", kwargs)
 
