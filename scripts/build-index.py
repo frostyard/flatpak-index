@@ -202,9 +202,9 @@ def rebase_target(labels):
     a string: the string's bytes, a NUL, then a NUL and the type "s". Raise
     ValueError when the label is there but is not that.
     """
-    value = labels.get(EOL_REBASE)
-    if value is None:
+    if EOL_REBASE not in labels:
         return None
+    value = labels[EOL_REBASE]
     if not isinstance(value, str):
         raise ValueError(f"{EOL_REBASE} is not a string")
     try:

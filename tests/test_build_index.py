@@ -494,6 +494,8 @@ class BuildIndexTest(unittest.TestCase):
             "not a string variant": base64.b64encode(target.encode() + b"\0\0u").decode(),
             "empty": gvariant_v_string(""),
             "inner NUL": gvariant_v_string("app/a\0b"),
+            "null": None,
+            "not a string": 5,
         }
         for n, (name, value) in enumerate(bad.items()):
             self.image("frostyard/igloo", f"bad{n}",
