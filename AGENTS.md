@@ -67,9 +67,12 @@ first. CI runs `make ci` in [`.github/workflows/ci.yml`](.github/workflows/ci.ym
   gets 1 level label, `level:L1` to `level:L4`, and `risk:high` at L1 and L2**
   (core ADR-0068, ADR-0078). The owner reads each level as the risk-paths spec
   says: L1 is every line, L2 the whole diff, L3 a skim of the diff, L4 the title
-  and CI. The workflow removes `ready-for-human` when the head moves after the
-  label, or when CI at the head is not green (core ADR-0077). The PR body names
-  each matched path and why the change is safe.
+  and CI. The org floors can raise that level, the workflow never lowers a label
+  that the pull request already has, a missing level label only warns, and a
+  missing `risk:high` label fails the job. The workflow removes
+  `ready-for-human` when the head moves after the label, or when CI at the head
+  is not green (core ADR-0077). The PR body names each matched path and why the
+  change is safe.
 - **A blocking review point adds a guard:** a test that fails without the fix,
   or a rule here when no test can catch it, plus 1 line in
   [`.memory/corrections.jsonl`](.memory/corrections.jsonl)
