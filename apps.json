@@ -5,6 +5,8 @@
     {"repository": "frostyard/frostnotes", "tags": ["latest"],
      "workflow": ".github/workflows/flatpak.yml"},
     {"repository": "frostyard/frostmail", "tags": ["latest"],
+     "workflow": ".github/workflows/flatpak.yml"},
+    {"repository": "frostyard/frostread", "tags": ["latest"],
      "workflow": ".github/workflows/flatpak.yml"}
   ]
 }

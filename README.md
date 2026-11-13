@@ -20,6 +20,7 @@ lists only what an app's CI built and signed.
 | [Igloo](https://github.com/frostyard/igloo) | A terminal for nsl machines and containers | `org.frostyard.Igloo` | `frostyard` |
 | [Frostnotes](https://github.com/frostyard/frostnotes) | Plain Markdown notes on your own computer | `org.frostyard.Frostnotes` | `frostyard` |
 | [Frostmail](https://github.com/frostyard/frostmail) | Read and send mail on your own computer | `org.frostyard.Frostmail` | `frostyard` |
+| [Frostread](https://github.com/frostyard/frostread) | Feeds and a reading list on your own computer | `org.frostyard.Frostread` | `frostyard` |
 
 [`apps.json`](apps.json) is the list the build reads. It also keeps Igloo's
 old app ID, `io.github.frostyard.Igloo`, so that installed copies move to the
@@ -34,6 +35,7 @@ flatpak remote-add --user --if-not-exists frostyard https://frostyard.github.io/
 flatpak install --user frostyard org.frostyard.Igloo
 flatpak install --user frostyard org.frostyard.Frostnotes
 flatpak install --user frostyard org.frostyard.Frostmail
+flatpak install --user frostyard org.frostyard.Frostread
 ```
 
 Update them with `flatpak update`, like any other Flatpak. Apps use runtimes
