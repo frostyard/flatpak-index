@@ -74,9 +74,8 @@ first. CI runs `make ci` in [`.github/workflows/ci.yml`](.github/workflows/ci.ym
   is not green (core ADR-0077). The PR body names each matched path and why the
   change is safe.
 - **A blocking review point adds a guard:** a test that fails without the fix,
-  or a rule here when no test can catch it, plus 1 line in
-  [`.memory/corrections.jsonl`](.memory/corrections.jsonl)
-  ([`.memory/README.md`](.memory/README.md)).
+  or a rule here when no test can catch it, plus 1 record file in
+  `.memory/corrections/` ([`.memory/README.md`](.memory/README.md)).
 - **No product change without its test.** `scripts/build-index.py`,
   `scripts/check-live.py`, `apps.json` and `frostyard.flatpakrepo` are the
   published contract; a change to them comes with a test in `tests/`.
