@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-06",
+  "scope": "baseline guard",
+  "correction": "A workflow scan must read both .github/workflows/*.yml and *.yaml, because GitHub runs both; a .yaml workflow escaped the B5 checks and the pin check",
+  "evidence": "frostyard/flatpak-index#11, supervisor review after cross-review re-review 2 of head be5315a (the same gap as frostyard/homebrew-tap#28)",
+  "promoted_to": "tests/test_baseline.py"
+}

@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-06",
+  "scope": "baseline guard",
+  "correction": "A step scan must read a key that shares the line with the list dash (- if: false), a Makefile prerequisite list must drop the comment first, and a JSON guard must refuse duplicate keys at every level, as core's parseStrictJson does",
+  "evidence": "frostyard/flatpak-index#11, cross-review (openai/gpt-6.1-sol) re-review 1 of head ae69277, findings 1 to 3",
+  "promoted_to": "tests/test_baseline.py"
+}

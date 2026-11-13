@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-06",
+  "scope": "baseline guard",
+  "correction": "A baseline guard must port the canonical rules (core's corrections, risk-paths and README checkers) and parse the workflow event and job conditions; a substring or partial check passes broken trees",
+  "evidence": "frostyard/flatpak-index#11, cross-review (openai/gpt-6.1-sol) of head 86889d1, findings 1 to 5",
+  "promoted_to": "tests/test_baseline.py"
+}
