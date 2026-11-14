@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-14",
+  "scope": "baseline",
+  "correction": "A port of core's check-corrections.mjs must fail a symbolic link at .memory before it reads either form, as core's linkedMemory() does; checking links only at .memory/corrections and its entries follows a linked parent",
+  "evidence": "frostyard/flatpak-index#19, cross-review (openai/gpt-6.1-sol) at head c0e78eb",
+  "promoted_to": "tests/test_baseline.py"
+}
