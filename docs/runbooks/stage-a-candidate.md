@@ -1,6 +1,6 @@
 # Runbook: stage a candidate
 
-A suite desktop app (frostnotes, frostmail, frostread) gets its listing only
+A suite desktop app (frostnotes, frostmail) gets its listing only
 after a test on a clean desktop installs the release's attested digest from a
 staged catalogue
 ([core ADR-0062](https://github.com/frostyard/core/blob/main/docs/adr/0062-make-desktop-suite-apps-standalone-flatpaks-with-opt-in-lodge.md)).

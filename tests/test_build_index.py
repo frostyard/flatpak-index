@@ -412,6 +412,19 @@ class BuildIndexTest(unittest.TestCase):
         for app in json.loads((ROOT / "apps.json").read_text())["apps"]:
             self.assertTrue(app.get("workflow"), app)
 
+    def test_readme_lists_exactly_the_apps_of_apps_json(self):
+        # The README's table and install lines tell users what the remote
+        # publishes, so they name the same repositories as apps.json: an app
+        # that leaves apps.json leaves the README too.
+        readme = (ROOT / "README.md").read_text()
+        section = readme.split("## What it publishes\n", 1)[1].split("\n## ", 1)[0]
+        rows = re.findall(r"^\| \[[^\]]+\]\(https://github\.com/([\w.-]+/[\w.-]+)\) \|[^|]*\| `([\w.]+)` \| `frostyard` \|$",
+                          section, re.MULTILINE)
+        listed = {app["repository"] for app in json.loads((ROOT / "apps.json").read_text())["apps"]}
+        self.assertEqual({repository for repository, _ in rows}, listed)
+        installs = re.findall(r"^flatpak install --user frostyard (\S+)$", readme, re.MULTILINE)
+        self.assertEqual(installs, [app_id for _, app_id in rows])
+
     def test_apps_json_lists_only_latest_and_old_app_ids(self):
         # The public catalogue never lists a candidate tag or a digest: only
         # latest, then the end-of-life tags of renamed app IDs.
