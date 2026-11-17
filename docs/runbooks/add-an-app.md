@@ -15,7 +15,8 @@ OCI image to GHCR and this repository names it in
 3. Make the package public: on the package's page in the
    [organization's packages](https://github.com/orgs/frostyard/packages),
    open *Package settings* and change its visibility. Private images are
-   skipped, because Flatpak clients cannot pull them.
+   skipped, because Flatpak clients cannot pull them. Once the app is listed, a
+   private or missing image fails the publish instead of removing the app.
 4. Add the repository to [`apps.json`](../../apps.json) and push. Name the
    release workflow's path in `"workflow"`, for example
    `".github/workflows/flatpak.yml"`. A digest without a valid attestation

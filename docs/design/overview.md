@@ -55,6 +55,23 @@ skipped, with a warning; the Flatpak check comes after the attestation check.
 A digest without a valid attestation is not a skip: the run fails and nothing
 is deployed, so the last deployed site stays live.
 
+A skip must not drop a listed app. After the build, the script reads the live
+index from `LIVE_INDEX` (the `index/static` of the remote that
+`frostyard.flatpakrepo` names). When an app of `apps.json` has 1 or more refs
+in the live index and 0 images in the new build, the run fails and writes no
+site, so nothing is deployed. The check is per repository: an app that keeps 1
+image is listed. A live end-of-life ref is not lost when the build lists the ref
+that it rebases to. A repository that is not in `apps.json` is never compared.
+To retire an app, remove it from `apps.json` by a PR, as
+[flatpak-index#20](https://github.com/frostyard/flatpak-index/pull/20) did for
+Frostread. There is no override.
+
+An unreadable live index fails the run too (a bad HTTP status, a network error,
+a timeout, a body that is not an index). A guard that passes when it cannot see
+the live state would let the very loss it exists for through. A failed run
+keeps the last site live, so the cost is only a delay. HTTP 404 means that no
+site exists yet, as before the first publish: the check skips, with a warning.
+
 **End-of-life rebases.** An image can mark its ref as end-of-life in favour of
 another ref (`flatpak build-commit-from --end-of-life-rebase`), so that
 `flatpak update` moves users to a new app ID. The script lists such an image

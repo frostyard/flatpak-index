@@ -43,6 +43,12 @@ first. CI runs `make ci` in [`.github/workflows/ci.yml`](.github/workflows/ci.ym
   `build_index` raises `Unverified`, `main` exits 1, and the `deploy` job has
   `needs: build`, so the last deployed site stays live. Never turn this into a
   skip or a warning.
+- **An app that the live index lists never drops out by a skip.**
+  `check_no_lost_apps` fails the build when a repository of `apps.json` had refs
+  in the live index (`LIVE_INDEX`) and has no image now, and an unreadable live
+  index fails too (`Lost`); only HTTP 404 skips, with a warning. Never turn it
+  into a skip or a warning, and add no override: to retire an app, remove it
+  from `apps.json` by a PR.
 - **Every manifest and config blob matches its sha256 digest**
   (`check_digest`), so the labels come from the verified image. Only an image
   that is missing, private or not a Flatpak is skipped, and the Flatpak check

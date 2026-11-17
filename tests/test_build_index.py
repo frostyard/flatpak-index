@@ -139,10 +139,53 @@ class BuildIndexTest(unittest.TestCase):
     def setUp(self):
         self.registry = FakeRegistry()
         self.gh = FakeGh()
+        self.live = None  # the live index document, or an Exception to raise; None: HTTP 404
         for patcher in (mock.patch.object(build_index, "fetch", self.registry.fetch),
+                        mock.patch.object(build_index, "fetch_live", self.fetch_live),
                         mock.patch.object(build_index.subprocess, "run", self.gh.run)):
             patcher.start()
             self.addCleanup(patcher.stop)
+
+    def fetch_live(self, url):
+        if self.live is None:
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, io.BytesIO())
+        if isinstance(self.live, Exception):
+            raise self.live
+        if isinstance(self.live, bytes):
+            return self.live
+        return json.dumps(self.live).encode()
+
+    def set_live(self, *pairs):
+        """Serve a live index of (repository, labels) pairs."""
+        results = {}
+        for repository, labels in pairs:
+            results.setdefault(repository, []).append({"Labels": labels})
+        self.live = {"Registry": "https://ghcr.io",
+                     "Results": [{"Name": r, "Images": i} for r, i in results.items()]}
+
+    def check(self, apps):
+        """Build, then run the live check the way main does; return the stderr text."""
+        skips = {}
+        with mock.patch("sys.stderr", io.StringIO()) as stderr:
+            index = build_index.build_index({"apps": apps}, skips)
+            build_index.check_no_lost_apps({"apps": apps}, index, build_index.live_index(), skips)
+        return stderr.getvalue()
+
+    def run_main(self, apps):
+        """Run main in a temporary directory; return (exit code or None, site exists, stderr, index text)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "apps.json"
+            path.write_text(json.dumps({"apps": apps}))
+            (Path(tmp) / "frostyard.flatpakrepo").write_text("[Flatpak Repo]\n")
+            site = Path(tmp) / "_site"
+            code = None
+            with mock.patch("sys.stderr", io.StringIO()) as stderr, mock.patch("sys.stdout", io.StringIO()):
+                try:
+                    build_index.main(["--apps", str(path), "--site", str(site)])
+                except SystemExit as e:
+                    code = e.code
+            static = site / "index" / "static"
+            return code, site.exists(), stderr.getvalue(), static.read_text() if static.exists() else None
 
     def image(self, repository, tag, labels, attest=True, **kwargs):
         digest = self.registry.add_image(repository, tag, labels, **kwargs)
@@ -544,6 +587,134 @@ class BuildIndexTest(unittest.TestCase):
         repo = (ROOT / "frostyard.flatpakrepo").read_text()
         self.assertIn("Url=oci+https://frostyard.github.io/flatpak-index\n", repo)
         self.assertIn("AuthenticatorName=org.flatpak.Authenticator.Oci\n", repo)
+
+    # The live-index guard: an installed app must not drop out of the remote by accident.
+
+    def test_live_ref_with_a_missing_image_fails(self):
+        # GHCR lost the tag; without the guard the next publish would remove the app.
+        self.set_live(("frostyard/igloo", flatpak_labels("a.B")))
+        with self.assertRaises(build_index.Lost) as caught:
+            self.check([APP])
+        for part in ("frostyard/igloo", "app/a.B/x86_64/master", "no public image for frostyard/igloo:latest"):
+            self.assertIn(part, str(caught.exception))
+
+    def test_live_ref_with_a_private_image_fails(self):
+        # A package turned private answers like a missing one; the app must not vanish quietly.
+        self.image("frostyard/igloo", "latest", flatpak_labels("a.B"))
+        self.registry.refused.add("frostyard/igloo")
+        self.set_live(("frostyard/igloo", flatpak_labels("a.B")))
+        with self.assertRaises(build_index.Lost) as caught:
+            self.check([APP])
+        self.assertIn("no public image for frostyard/igloo: HTTP 403", str(caught.exception))
+
+    def test_live_ref_with_a_non_flatpak_image_fails(self):
+        # A tag that now names a foreign image is skipped, which would drop the app.
+        self.image("frostyard/igloo", "latest", {"org.opencontainers.image.title": "x"})
+        self.set_live(("frostyard/igloo", flatpak_labels("a.B")))
+        with self.assertRaises(build_index.Lost) as caught:
+            self.check([APP])
+        self.assertIn("is not a Flatpak image", str(caught.exception))
+
+    def test_all_apps_present_is_no_error_and_main_writes_the_same_index(self):
+        # The live check only reads: the index/static document is the same with or without it.
+        self.image("frostyard/igloo", "latest", flatpak_labels("a.B"))
+        self.set_live(("frostyard/igloo", flatpak_labels("a.B")))
+        self.check([APP])
+        code, exists, _, with_live = self.run_main([APP])
+        self.assertIsNone(code)
+        self.live = None
+        _, _, _, without_live = self.run_main([APP])
+        self.assertTrue(exists)
+        self.assertEqual(with_live, without_live)
+
+    def test_repository_not_in_apps_json_is_not_compared(self):
+        # Removing an app from apps.json by a PR is the way to retire it.
+        self.image("frostyard/igloo", "latest", flatpak_labels("a.B"))
+        self.set_live(("frostyard/igloo", flatpak_labels("a.B")), ("frostyard/frostread", flatpak_labels("c.D")))
+        self.check([APP])
+
+    def test_new_app_with_no_image_is_only_a_warning(self):
+        # A repository that the live index never listed has nothing to lose.
+        self.set_live(("frostyard/other", flatpak_labels("c.D")))
+        self.assertIn("no public image for frostyard/igloo:latest", self.check([APP]))
+
+    def test_end_of_life_live_ref_with_a_listed_target_is_not_lost(self):
+        # The new ID is listed, so users of the old ID move to it by flatpak update.
+        self.image("frostyard/other", "latest", flatpak_labels("a.New"))
+        self.set_live(("frostyard/igloo", eol_labels("a.Old", "a.New")))
+        self.check([APP, {"repository": "frostyard/other", "workflow": WORKFLOW}])
+
+    def test_end_of_life_live_ref_with_a_missing_target_fails(self):
+        # With no listed target, the end-of-life ref is a real loss.
+        self.set_live(("frostyard/igloo", eol_labels("a.Old", "a.New")))
+        with self.assertRaises(build_index.Lost):
+            self.check([APP])
+
+    def test_repository_keeping_one_of_two_live_refs_is_not_lost(self):
+        # The rule is per repository: an end-of-life image skipped beside a listed one is fine.
+        self.image("frostyard/igloo", "latest", flatpak_labels("a.B"))
+        self.image("frostyard/igloo", "a.Old", eol_labels("a.Old", "a.Missing"))
+        self.set_live(("frostyard/igloo", flatpak_labels("a.B")), ("frostyard/igloo", eol_labels("a.Old", "a.New")))
+        self.check([{**APP, "tags": ["latest", "a.Old"]}])
+
+    def test_live_index_404_is_a_warning(self):
+        # No site exists before the first publish.
+        self.assertIsNone(self.live)
+        with mock.patch("sys.stderr", io.StringIO()) as stderr:
+            self.assertIsNone(build_index.live_index())
+        self.assertIn("no live index at " + build_index.LIVE_INDEX, stderr.getvalue())
+        self.assertIn("HTTP 404", stderr.getvalue())
+
+    def test_unreadable_live_index_fails_closed(self):
+        # A guard that cannot see the live state must not pass.
+        url = "https://example.test/index/static"
+        cases = [
+            urllib.error.HTTPError(url, 500, "Server Error", {}, io.BytesIO()),
+            urllib.error.URLError("no route"),
+            TimeoutError("timed out"),
+            b"<html>not json",
+            b'{"Registry": "x"}',
+            b'{"Results": {}}',
+            b'{"Results": [{"Name": "a/b", "Images": [{"Labels": {}}]}]}',
+            b'{"Results": [{"Name": 1, "Images": []}]}',
+            b'{"Results": [{"Name": "a/b", "Images": [{"Labels": {"org.flatpak.ref": ""}}]}]}',
+        ]
+        for case in cases:
+            with self.subTest(case=case):
+                self.live = case
+                with self.assertRaises(build_index.Lost) as caught:
+                    build_index.live_index(url)
+                self.assertIn(url, str(caught.exception))
+                self.assertIn("cannot read the live index", str(caught.exception))
+
+    def test_live_index_is_read_into_refs_by_repository(self):
+        # The shape of the result is what check_no_lost_apps relies on.
+        self.set_live(("frostyard/igloo", flatpak_labels("a.B")))
+        self.assertEqual(build_index.live_index(),
+                         {"frostyard/igloo": [("app/a.B/x86_64/master", flatpak_labels("a.B"))]})
+
+    def test_main_exits_1_and_writes_no_site_when_an_app_is_lost(self):
+        # Without a site, the deploy job (needs: build) does not run, so the last site stays live.
+        self.set_live(("frostyard/igloo", flatpak_labels("a.B")))
+        code, exists, stderr, _ = self.run_main([APP])
+        self.assertEqual(code, 1)
+        self.assertFalse(exists)
+        self.assertIn("error:", stderr)
+        self.assertIn("frostyard/igloo", stderr)
+
+    def test_main_fails_when_the_live_index_cannot_be_read(self):
+        # Guard: main must read the live index and fail closed, not skip the check.
+        self.image("frostyard/igloo", "latest", flatpak_labels("a.B"))
+        self.live = b"not json"
+        code, exists, stderr, _ = self.run_main([APP])
+        self.assertEqual(code, 1)
+        self.assertFalse(exists)
+        self.assertIn("cannot read the live index", stderr)
+
+    def test_live_index_is_the_remote_of_the_flatpakrepo(self):
+        # check-live.py and the guard must read the same site that users add.
+        url = re.search(r"^Url=oci\+(.*)$", (ROOT / "frostyard.flatpakrepo").read_text(), re.M).group(1)
+        self.assertEqual(build_index.LIVE_INDEX, url + "/index/static")
 
 
 if __name__ == "__main__":

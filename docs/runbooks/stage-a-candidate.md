@@ -21,8 +21,9 @@ test keeps every `apps.json` tag at `latest` or at an old app ID (see
 
 Do this on a host where `gh` is signed in (`gh auth login`, or `GH_TOKEN` in
 the environment): the build runs `gh attestation verify`. The test machine
-needs no credentials; step B copies the built directory to it. Run this from
-the repository root:
+needs no credentials; step B copies the built directory to it. The build also
+reads the live index, so the host needs network access to the Pages site. Run
+this from the repository root:
 
 ```bash
 skopeo inspect --no-creds --format '{{.Digest}}' \
