@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("build_index", ROOT / "scripts" / "build-index.py")
 build_index = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build_index)
+# BuildIndexTest patches fetch_live; the transport tests call the real one.
+REAL_FETCH_LIVE = build_index.fetch_live
 
 OCI_MANIFEST = "application/vnd.oci.image.manifest.v1+json"
 OCI_INDEX = "application/vnd.oci.image.index.v1+json"
@@ -710,6 +712,41 @@ class BuildIndexTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertFalse(exists)
         self.assertIn("cannot read the live index", stderr)
+
+    def test_same_ref_in_another_repository_does_not_hide_a_loss(self):
+        # The rule is per repository: another repository that lists the same
+        # ref does not make up for a repository that lost every image.
+        self.image("frostyard/other", "latest", flatpak_labels("a.B"))
+        self.set_live(("frostyard/igloo", flatpak_labels("a.B")))
+        with self.assertRaises(build_index.Lost) as caught:
+            self.check([APP, {"repository": "frostyard/other", "workflow": WORKFLOW}])
+        self.assertIn("frostyard/igloo: the live index lists app/a.B/x86_64/master", str(caught.exception))
+
+    def test_live_fetch_defeats_the_pages_cache(self):
+        # A stale CDN copy from before an app's first listing would let its loss through,
+        # so each request carries a new query token, as check-live.py does.
+        requests = []
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def urlopen(request, timeout):
+            requests.append((request, timeout))
+            return Response(b"{}")
+
+        with mock.patch.object(build_index.urllib.request, "urlopen", urlopen):
+            self.assertEqual(REAL_FETCH_LIVE(build_index.LIVE_INDEX), b"{}")
+            REAL_FETCH_LIVE(build_index.LIVE_INDEX)
+        urls = [request.full_url for request, _ in requests]
+        for url in urls:
+            self.assertRegex(url, "^" + re.escape(build_index.LIVE_INDEX) + r"\?check=\d+$")
+        self.assertNotEqual(urls[0], urls[1])
+        self.assertEqual(requests[0][0].get_header("Cache-control"), "no-cache")
+        self.assertEqual(requests[0][1], 60)
 
     def test_live_index_is_the_remote_of_the_flatpakrepo(self):
         # check-live.py and the guard must read the same site that users add.

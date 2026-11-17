@@ -48,6 +48,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -100,7 +101,13 @@ def fetch(url, token=None, accept=None):
 
 
 def fetch_live(url):
-    """Return the body of a GET of the live index, without a cache."""
+    """Return the body of a GET of the live index, without a cache.
+
+    GitHub Pages caches a file for 10 minutes, and its CDN can ignore
+    Cache-Control, so each request also carries a new query token: a stale copy
+    from before an app's first listing would let the guard pass that app's loss.
+    """
+    url = f"{url}?check={time.time_ns()}"
     request = urllib.request.Request(url, headers={
         "User-Agent": "frostyard-flatpak-index", "Cache-Control": "no-cache"})
     with urllib.request.urlopen(request, timeout=60) as response:
@@ -369,11 +376,14 @@ def check_no_lost_apps(apps, index, live, skips):
             continue
         lost = []
         for ref, labels in live.get(repository, []):
+            # Only an end-of-life ref whose new ref the build lists is not a
+            # loss; the same ref in another repository does not count, because
+            # this repository still lost every image.
             try:
                 target = rebase_target(labels)
             except ValueError:
                 target = None
-            if ref not in built and target not in built:
+            if target is None or target not in built:
                 lost.append(ref)
         if lost:
             reasons = "; ".join(skips.get(repository, [])) or "no image was read"

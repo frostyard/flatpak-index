@@ -60,8 +60,11 @@ index from `LIVE_INDEX` (the `index/static` of the remote that
 `frostyard.flatpakrepo` names). When an app of `apps.json` has 1 or more refs
 in the live index and 0 images in the new build, the run fails and writes no
 site, so nothing is deployed. The check is per repository: an app that keeps 1
-image is listed. A live end-of-life ref is not lost when the build lists the ref
-that it rebases to. A repository that is not in `apps.json` is never compared.
+image is listed, and the same ref in another repository does not make up for a
+repository that lost every image. A live end-of-life ref is not lost when the
+build lists the ref that it rebases to. A repository that is not in `apps.json`
+is never compared. Each fetch of the live index carries a new query token, as
+the live check does, so a stale Pages cache cannot hide a loss.
 To retire an app, remove it from `apps.json` by a PR, as
 [flatpak-index#20](https://github.com/frostyard/flatpak-index/pull/20) did for
 Frostread. There is no override.
