@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "build-index",
+  "correction": "check_no_lost_apps compares per repository: a live ref of a repository that lost every image is a loss even when another repository lists the same ref; only an end-of-life ref whose rebase target the build lists is exempt",
+  "evidence": "frostyard/flatpak-index#21, cross-review by openai/gpt-6.1-sol at 5f18a5e",
+  "promoted_to": "tests/test_build_index.py"
+}

@@ -20,5 +20,8 @@ that it rebases to. One run can read the old `latest` and the new end-of-life
 tag, because the app moves them one after the other; that run skips the
 end-of-life image and keeps the old one, and the next run lists both.
 
+The live index check does not count an end-of-life ref as lost when the build
+lists the ref that it rebases to.
+
 The verify job lists the live remote with `flatpak remote-ls --all`, because
 `remote-ls` hides end-of-life refs without it.

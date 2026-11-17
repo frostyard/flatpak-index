@@ -26,6 +26,15 @@ the new ID before it tags the end-of-life image, and one run can read the old
 `latest` and the new end-of-life tag. Without the check, that run would
 publish a rebase to a ref that the remote does not have.
 
+An app that users installed must not drop out of the remote by accident. After
+the build, the script reads the live index (LIVE_INDEX). When an app of
+apps.json had 1 or more refs there and the new build lists none of its images
+(missing, private or not a Flatpak), the run fails and writes no site, so
+nothing is deployed. A live end-of-life ref whose new ref the build lists is
+not a loss. To retire an app, remove it from apps.json. The live fetch fails
+closed: a live index that cannot be read fails the run. Only HTTP 404 (no site
+yet, the first publish) skips the check, with a warning.
+
 Usage: build-index.py --apps apps.json --site _site
 """
 
@@ -33,17 +42,23 @@ import argparse
 import base64
 import html
 import hashlib
+import http.client
 import json
 import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 REGISTRY = "https://ghcr.io"
+
+# The index/static of the remote that frostyard.flatpakrepo names: the site that
+# scripts/check-live.py reads after a deploy.
+LIVE_INDEX = "https://frostyard.github.io/flatpak-index/index/static"
 
 MANIFEST_TYPES = [
     "application/vnd.oci.image.manifest.v1+json",
@@ -70,6 +85,10 @@ class Unverified(Exception):
     """An image digest has no valid attestation, or its content does not match its digest."""
 
 
+class Lost(Exception):
+    """An app of apps.json had refs in the live index and has none in the new build, or the live index cannot be read."""
+
+
 def fetch(url, token=None, accept=None):
     """Return the response headers and body of a GET."""
     request = urllib.request.Request(url, headers={"User-Agent": "frostyard-flatpak-index"})
@@ -79,6 +98,58 @@ def fetch(url, token=None, accept=None):
         request.add_header("Accept", accept)
     with urllib.request.urlopen(request, timeout=60) as response:
         return response.headers, response.read()
+
+
+def fetch_live(url):
+    """Return the body of a GET of the live index, without a cache.
+
+    GitHub Pages caches a file for 10 minutes, and its CDN can ignore
+    Cache-Control, so each request also carries a new query token: a stale copy
+    from before an app's first listing would let the guard pass that app's loss.
+    """
+    url = f"{url}?check={time.time_ns()}"
+    request = urllib.request.Request(url, headers={
+        "User-Agent": "frostyard-flatpak-index", "Cache-Control": "no-cache"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return response.read()
+
+
+def live_index(url=LIVE_INDEX):
+    """The refs of the live index: repository -> [(ref, labels)]; None when no site exists yet (HTTP 404).
+
+    Fail closed: any other failure raises Lost, because a guard that cannot see
+    the live state would let the loss through.
+    """
+    try:
+        data = fetch_live(url)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print(f"warning: no live index at {url} (HTTP 404); the first publish has nothing to compare with",
+                  file=sys.stderr)
+            return None
+        raise Lost(f"cannot read the live index {url}: HTTP {e.code}") from e
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+        raise Lost(f"cannot read the live index {url}: {e!r}") from e
+    try:
+        document = json.loads(data)
+        if not isinstance(document, dict) or not isinstance(document.get("Results"), list):
+            raise TypeError("it has no Results list")
+        live = {}
+        for result in document["Results"]:
+            if not isinstance(result, dict) or not isinstance(result.get("Name"), str):
+                raise TypeError("a result has no Name string")
+            if not isinstance(result.get("Images"), list):
+                raise TypeError(f'{result["Name"]} has no Images list')
+            pairs = live.setdefault(result["Name"], [])
+            for image in result["Images"]:
+                labels = image.get("Labels") if isinstance(image, dict) else None
+                ref = labels.get("org.flatpak.ref") if isinstance(labels, dict) else None
+                if not isinstance(ref, str) or not ref:
+                    raise TypeError(f'an image of {result["Name"]} has no org.flatpak.ref')
+                pairs.append((ref, labels))
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        raise Lost(f"cannot read the live index {url}: it is not an index/static document ({e!r})") from e
+    return live
 
 
 def pull_token(repository):
@@ -162,7 +233,7 @@ def verify_attestation(repository, digest, workflow):
     raise Unverified(f"{what}: no attestation from a v* tag built by that workflow")
 
 
-def image_entries(repository, tag, workflow):
+def image_entries(repository, tag, workflow, skips=None):
     """The Flatpak images a tag names, one per architecture."""
     token = pull_token(repository)
     digest, media_type, manifest = get_manifest(repository, tag, token)
@@ -182,7 +253,10 @@ def image_entries(repository, tag, workflow):
         labels = dict(manifest.get("annotations") or {})
         labels.update((config.get("config") or {}).get("Labels") or {})
         if "org.flatpak.ref" not in labels:
-            print(f"warning: {repository}:{tag} ({digest}) is not a Flatpak image; skipped", file=sys.stderr)
+            reason = f"{repository}:{tag} ({digest}) is not a Flatpak image; skipped"
+            print(f"warning: {reason}", file=sys.stderr)
+            if skips is not None:
+                skips.setdefault(repository, []).append(reason)
             continue
         entries.append({
             "Digest": digest,
@@ -222,7 +296,7 @@ def rebase_target(labels):
     return target
 
 
-def drop_orphan_rebases(results):
+def drop_orphan_rebases(results, skips=None):
     """Skip each image whose end-of-life rebase target ref is not in the index.
 
     Repeat until nothing changes, so that a chain of rebases ends at a listed ref.
@@ -237,12 +311,17 @@ def drop_orphan_rebases(results):
                 try:
                     target = rebase_target(image["Labels"])
                 except ValueError as e:
-                    print(f"warning: {where}: {e}; skipped", file=sys.stderr)
+                    reason = f"{where}: {e}; skipped"
+                    print(f"warning: {reason}", file=sys.stderr)
+                    if skips is not None:
+                        skips.setdefault(result["Name"], []).append(reason)
                     dropped = True
                     continue
                 if target is not None and target not in refs:
-                    print(f"warning: {where} rebases to {target}, which the index does not list; skipped",
-                          file=sys.stderr)
+                    reason = f"{where} rebases to {target}, which the index does not list; skipped"
+                    print(f"warning: {reason}", file=sys.stderr)
+                    if skips is not None:
+                        skips.setdefault(result["Name"], []).append(reason)
                     dropped = True
                     continue
                 kept.append(image)
@@ -252,8 +331,11 @@ def drop_orphan_rebases(results):
             return results
 
 
-def build_index(apps):
-    """The index/static document for the apps in an apps.json document."""
+def build_index(apps, skips=None):
+    """The index/static document for the apps in an apps.json document.
+
+    When skips is a dict, it gets the reasons for each skipped image, by repository.
+    """
     for app in apps["apps"]:
         if not app.get("workflow"):
             raise ValueError(f'{app.get("repository")}: apps.json needs a "workflow" key, the release workflow path in that repository')
@@ -264,9 +346,12 @@ def build_index(apps):
         images = {}
         for tag in app.get("tags", ["latest"]):
             try:
-                entries = image_entries(repository, tag, workflow)
+                entries = image_entries(repository, tag, workflow, skips=skips)
             except Missing as e:
-                print(f"warning: no public image for {e}; skipped", file=sys.stderr)
+                reason = f"no public image for {e}; skipped"
+                print(f"warning: {reason}", file=sys.stderr)
+                if skips is not None:
+                    skips.setdefault(repository, []).append(reason)
                 continue
             for entry in entries:
                 if entry["Digest"] in images:
@@ -275,7 +360,37 @@ def build_index(apps):
                     images[entry["Digest"]] = entry
         if images:
             results.append({"Name": repository, "Images": list(images.values())})
-    return {"Registry": REGISTRY, "Results": drop_orphan_rebases(results)}
+    return {"Registry": REGISTRY, "Results": drop_orphan_rebases(results, skips=skips)}
+
+
+def check_no_lost_apps(apps, index, live, skips):
+    """Raise Lost when an app of apps.json had refs in the live index and has no image in the new index."""
+    if live is None:
+        return
+    built = {image["Labels"]["org.flatpak.ref"] for result in index["Results"] for image in result["Images"]}
+    listed = {result["Name"] for result in index["Results"] if result["Images"]}
+    errors = []
+    for app in apps["apps"]:
+        repository = app["repository"]
+        if repository in listed:
+            continue
+        lost = []
+        for ref, labels in live.get(repository, []):
+            # Only an end-of-life ref whose new ref the build lists is not a
+            # loss; the same ref in another repository does not count, because
+            # this repository still lost every image.
+            try:
+                target = rebase_target(labels)
+            except ValueError:
+                target = None
+            if target is None or target not in built:
+                lost.append(ref)
+        if lost:
+            reasons = "; ".join(skips.get(repository, [])) or "no image was read"
+            errors.append(f"{repository}: the live index lists {', '.join(lost)}, but this build lists no image "
+                          f"of it ({reasons}); to retire an app, remove it from apps.json")
+    if errors:
+        raise Lost(" | ".join(errors))
 
 
 def label_name(image):
@@ -341,9 +456,15 @@ def main(argv=None):
 
     apps = json.loads(args.apps.read_text())
     try:
-        index = build_index(apps)
+        skips = {}
+        index = build_index(apps, skips)
     except Unverified as e:
         print(f"error: unverified image: {e}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        check_no_lost_apps(apps, index, live_index(), skips)
+    except Lost as e:
+        print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
     write_site(index, args.site, args.apps.resolve().parent)
     count = sum(len(r["Images"]) for r in index["Results"])

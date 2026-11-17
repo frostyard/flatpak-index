@@ -58,8 +58,9 @@ suite desktop app needs first.
 An app's CI builds its Flatpak, exports it with `flatpak build-bundle --oci`
 and attests the image digest. [`scripts/build-index.py`](scripts/build-index.py)
 reads the images of every app in `apps.json` from GHCR, verifies each
-attestation against the app's own release workflow, writes `index/static`, and
-the [publish workflow](.github/workflows/publish.yml) deploys it to GitHub
+attestation against the app's own release workflow, writes `index/static`
+(it fails, with nothing deployed, when a skip would drop an app that the live
+remote lists), and the [publish workflow](.github/workflows/publish.yml) deploys it to GitHub
 Pages with [`frostyard.flatpakrepo`](frostyard.flatpakrepo). After each deploy
 a job reads the live site back and installs the remote with a Flatpak client.
 [docs/design/overview.md](docs/design/overview.md) has the flow, the
