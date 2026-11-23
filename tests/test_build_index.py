@@ -482,6 +482,20 @@ class BuildIndexTest(unittest.TestCase):
                     self.assertRegex(tag, old_id)
                     self.assertFalse(tag.startswith("v"), tag)
 
+    def test_pocketgo_lists_the_promoted_candidate_from_its_flatpak_workflow(self):
+        repository = "frostyard/pocketgo"
+        apps = json.loads((ROOT / "apps.json").read_text())["apps"]
+        app = next(app for app in apps if app["repository"] == repository)
+        self.assertEqual(app["tags"], ["latest"])
+        labels = flatpak_labels("org.frostyard.PocketGo")
+        digest = self.registry.add_image(repository, "latest", labels)
+        self.gh.attest(repository, digest, workflow=WORKFLOW, ref="refs/tags/v0.1.0-rc.1")
+        index, warnings = self.index([app])
+        self.assertEqual(warnings, "")
+        image = index["Results"][0]["Images"][0]
+        self.assertEqual(image["Digest"], digest)
+        self.assertEqual(image["Labels"]["org.flatpak.ref"], labels["org.flatpak.ref"])
+
     def test_igloo_keeps_its_old_app_id_tag(self):
         # Installed copies of the old ID need the end-of-life image to see the rebase.
         apps = {app["repository"]: app for app in json.loads((ROOT / "apps.json").read_text())["apps"]}
